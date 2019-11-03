@@ -122,6 +122,75 @@ SamsungV0Decompressor::decodeDifferences(BitPumpMSB32* pump) {
   return diffs;
 }
 
+inline __attribute__((always_inline)) void
+SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
+  const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
+
+  pump->fill();
+  bool dir = !!pump->getBitsNoFill(1);
+
+  std::array<int, 4> op;
+  for (int& i : op)
+    i = pump->getBitsNoFill(2);
+
+  for (int i = 0; i < 4; i++) {
+    assert(op[i] >= 0 && op[i] <= 3);
+
+    switch (op[i]) {
+    case 3:
+      len[i] = pump->getBits(4);
+      break;
+    case 2:
+      len[i]--;
+      break;
+    case 1:
+      len[i]++;
+      break;
+    default:
+      // FIXME: it can be zero too.
+      break;
+    }
+
+    if (len[i] < 0 || len[i] > 16)
+      ThrowRDE("Invalid bit length - not in [0, 16] range.");
+  }
+
+  const std::array<int16_t, 16> diffs = decodeDifferences(pump);
+
+  if (dir) {
+    if (row < 2)
+      ThrowRDE("Upward prediction for the first two rows. Raw corrupt");
+
+    if (col + 16 >= out.width)
+      ThrowRDE("Upward prediction for the last block of pixels. Raw corrupt");
+
+    // Upward prediction
+    // Now, actually apply the differences.
+    for (int c = 0; c < 16; c += 2) {
+      out(row, col + c) = diffs[c] + out(row - 1, col + c);
+    }
+    // Why on earth upward prediction only looks up 1 line above
+    // is beyond me, it will hurt compression a deal.
+    for (int c = 1; c < 16; c += 2) {
+      out(row, col + c) = diffs[c] + out(row - 2, col + c);
+    }
+  } else {
+    // Now, actually apply the differences.
+    // Left to right prediction. First we decode even pixels
+    int pred_left = col != 0 ? out(row, col - 2) : 128;
+    const int colsToRemaining = out.width - col;
+    const int colsToFill = std::min(colsToRemaining, 16);
+    for (int c = 0; c < colsToFill; c += 2) {
+      out(row, col + c) = diffs[c] + pred_left;
+    }
+    // Now we decode odd pixels
+    pred_left = col != 0 ? out(row, col - 1) : 128;
+    for (int c = 1; c < colsToFill; c += 2) {
+      out(row, col + c) = diffs[c] + pred_left;
+    }
+  }
+}
+
 void SamsungV0Decompressor::decompressStrip(int row, const ByteStream& bs) {
   const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
   assert(out.width > 0);
@@ -132,71 +201,8 @@ void SamsungV0Decompressor::decompressStrip(int row, const ByteStream& bs) {
     i = row < 2 ? 7 : 4;
 
   // Image is arranged in groups of 16 pixels horizontally
-  for (int col = 0; col < out.width; col += 16) {
-    bits.fill();
-    bool dir = !!bits.getBitsNoFill(1);
-
-    std::array<int, 4> op;
-    for (int& i : op)
-      i = bits.getBitsNoFill(2);
-
-    for (int i = 0; i < 4; i++) {
-      assert(op[i] >= 0 && op[i] <= 3);
-
-      switch (op[i]) {
-      case 3:
-        len[i] = bits.getBits(4);
-        break;
-      case 2:
-        len[i]--;
-        break;
-      case 1:
-        len[i]++;
-        break;
-      default:
-        // FIXME: it can be zero too.
-        break;
-      }
-
-      if (len[i] < 0 || len[i] > 16)
-        ThrowRDE("Invalid bit length - not in [0, 16] range.");
-    }
-
-    const std::array<int16_t, 16> diffs = decodeDifferences(&bits);
-
-    if (dir) {
-      if (row < 2)
-        ThrowRDE("Upward prediction for the first two rows. Raw corrupt");
-
-      if (col + 16 >= out.width)
-        ThrowRDE("Upward prediction for the last block of pixels. Raw corrupt");
-
-      // Upward prediction
-      // Now, actually apply the differences.
-      for (int c = 0; c < 16; c += 2) {
-        out(row, col + c) = diffs[c] + out(row - 1, col + c);
-      }
-      // Why on earth upward prediction only looks up 1 line above
-      // is beyond me, it will hurt compression a deal.
-      for (int c = 1; c < 16; c += 2) {
-        out(row, col + c) = diffs[c] + out(row - 2, col + c);
-      }
-    } else {
-      // Now, actually apply the differences.
-      // Left to right prediction. First we decode even pixels
-      int pred_left = col != 0 ? out(row, col - 2) : 128;
-      const int colsToRemaining = out.width - col;
-      const int colsToFill = std::min(colsToRemaining, 16);
-      for (int c = 0; c < colsToFill; c += 2) {
-        out(row, col + c) = diffs[c] + pred_left;
-      }
-      // Now we decode odd pixels
-      pred_left = col != 0 ? out(row, col - 1) : 128;
-      for (int c = 1; c < colsToFill; c += 2) {
-        out(row, col + c) = diffs[c] + pred_left;
-      }
-    }
-  }
+  for (int col = 0; col < out.width; col += 16)
+    processBlock(&bits, row, col);
 }
 
 } // namespace rawspeed

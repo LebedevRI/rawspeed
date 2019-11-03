@@ -46,6 +46,9 @@ class SamsungV0Decompressor final : public AbstractSamsungDecompressor {
   inline __attribute__((always_inline)) std::array<int16_t, 16>
   decodeDifferences(BitPumpMSB32* pump);
 
+  inline __attribute__((always_inline)) void processBlock(BitPumpMSB32* pump,
+                                                          int row, int col);
+
 public:
   SamsungV0Decompressor(const RawImage& image, const ByteStream& bso,
                         const ByteStream& bsr);
