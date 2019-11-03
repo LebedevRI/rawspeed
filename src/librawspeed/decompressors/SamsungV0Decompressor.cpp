@@ -48,7 +48,8 @@ SamsungV0Decompressor::SamsungV0Decompressor(const RawImage& image,
   const uint32_t width = mRaw->dim.x;
   const uint32_t height = mRaw->dim.y;
 
-  if (width == 0 || height == 0 || width < 16 || width > 5546 || height > 3714)
+  if (width == 0 || height == 0 || width < 16 || width % 2 != 0 ||
+      width > 5546 || height > 3714)
     ThrowRDE("Unexpected image dimensions found: (%u; %u)", width, height);
 
   computeStripes(bso.peekStream(height, 4), bsr);
@@ -185,6 +186,7 @@ SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
     }();
     const int colsToRemaining = out.width - col;
     const int colsToFill = std::min(colsToRemaining, 16);
+    assert(colsToFill % 2 == 0);
     // Now, actually apply the differences.
     for (int c = 0; c < colsToFill; ++c)
       out(row, col + c) = diffs[c] + baseline[c & 1];
