@@ -178,19 +178,17 @@ SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
       out(row, col + c) = diffs[c] + out(row - 2, col + c);
     }
   } else {
-    // Now, actually apply the differences.
-    // Left to right prediction. First we decode even pixels
-    int pred_left = col != 0 ? out(row, col - 2) : 128;
+    // Left to right prediction. The differences are specified as compared to
+    // the last two pixels of the previous block.
+    const auto baseline = [out, row, col]() -> std::array<uint16_t, 2> {
+      if (col == 0)
+        return {{128, 128}};
+      return {{out(row, col - 2), out(row, col - 1)}};
+    }();
     const int colsToRemaining = out.width - col;
     const int colsToFill = std::min(colsToRemaining, 16);
-    for (int c = 0; c < colsToFill; c += 2) {
-      out(row, col + c) = diffs[c] + pred_left;
-    }
-    // Now we decode odd pixels
-    pred_left = col != 0 ? out(row, col - 1) : 128;
-    for (int c = 1; c < colsToFill; c += 2) {
-      out(row, col + c) = diffs[c] + pred_left;
-    }
+    for (int c = 0; c < colsToFill; ++c)
+      out(row, col + c) = diffs[c] + baseline[c & 1];
   }
 }
 
