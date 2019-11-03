@@ -138,7 +138,7 @@ SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
 
     switch (op[i]) {
     case 3:
-      len[i] = pump->getBits(4);
+      len[i] = pump->getBitsNoFill(4);
       break;
     case 2:
       len[i]--;
