@@ -161,22 +161,20 @@ SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
   const std::array<int16_t, 16> diffs = decodeDifferences(pump);
 
   if (dir) {
-    if (row < 2)
-      ThrowRDE("Upward prediction for the first two rows. Raw corrupt");
+    if (row < 2 || col + 16 >= out.width)
+      ThrowRDE("Upward prediction for the first two rows / last row block");
 
-    if (col + 16 >= out.width)
-      ThrowRDE("Upward prediction for the last block of pixels. Raw corrupt");
-
-    // Upward prediction
+    // Upward prediction. The differences are specified as compared to the
+    // previous row for even pixels, or two rows above for odd pixels.
+    const auto baseline = [out, row, col]() -> std::array<uint16_t, 16> {
+      std::array<uint16_t, 16> prev;
+      for (int c = 0; c < 16; ++c)
+        prev[c] = out(row - 1 - (c & 1), col + c);
+      return prev;
+    }();
     // Now, actually apply the differences.
-    for (int c = 0; c < 16; c += 2) {
-      out(row, col + c) = diffs[c] + out(row - 1, col + c);
-    }
-    // Why on earth upward prediction only looks up 1 line above
-    // is beyond me, it will hurt compression a deal.
-    for (int c = 1; c < 16; c += 2) {
-      out(row, col + c) = diffs[c] + out(row - 2, col + c);
-    }
+    for (int c = 0; c < 16; ++c)
+      out(row, col + c) = diffs[c] + baseline[c];
   } else {
     // Left to right prediction. The differences are specified as compared to
     // the last two pixels of the previous block.
@@ -187,6 +185,7 @@ SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
     }();
     const int colsToRemaining = out.width - col;
     const int colsToFill = std::min(colsToRemaining, 16);
+    // Now, actually apply the differences.
     for (int c = 0; c < colsToFill; ++c)
       out(row, col + c) = diffs[c] + baseline[c & 1];
   }
