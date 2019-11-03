@@ -116,10 +116,17 @@ SamsungV0Decompressor::prepareBaselineValues(int row, int col, bool dir) {
     if (row < 2 || col + 16 >= img.width)
       ThrowRDE("Upward prediction for the first two rows / last row block");
 
+    // Preload the entire block from last two rows.
+    std::array<std::array<uint16_t, 16>, 2> prev;
+    for (int c = 0; c < 16; ++c)
+      prev[1][c] = img(row - 2, col + c);
+    for (int c = 0; c < 16; ++c)
+      prev[0][c] = img(row - 1, col + c);
+
     // The differences are specified as compared to the pixels of the previous
     // row for even pixels, or to pixels from two rows above for odd pixels.
     for (int c = 0; c < 16; ++c)
-      baseline[c] = img(row - 1 - (c & 1), col + c);
+      baseline[c] = prev[c & 1][c];
 
     return baseline;
   }
