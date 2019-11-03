@@ -192,9 +192,9 @@ SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
       ThrowRDE("Invalid bit length - not in [0, 16] range.");
   }
 
+  const std::array<int16_t, 16> diffs = decodeDifferences(pump);
   const std::array<uint16_t, 16> baseline =
       prepareBaselineValues(row, col, dir);
-  const std::array<int16_t, 16> diffs = decodeDifferences(pump);
 
   // Now, actually apply the differences.
   const int colsToRemaining = out.width - col;
