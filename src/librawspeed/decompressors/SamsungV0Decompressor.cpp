@@ -109,17 +109,20 @@ SamsungV0Decompressor::decodeDifferences(BitPumpMSB32* pump) {
   std::array<int16_t, 16> diffs;
   // First, decode all differences. They are stored interlaced,
   // first for even pixels then for odd pixels.
-  for (int c = 0; c < 16; c += 2) {
-    int b = len[c >> 3];
-    int16_t diff = getDiff(pump, b);
-    diffs[c] = diff;
+
+  for (int i = 0; i < 16; ++i)
+    diffs[i] = getDiff(pump, len[i >> 2]);
+
+  std::array<int16_t, 16> shuffled;
+  for (int in = 0, out = 0; in < 16 && out < 16; ++in) {
+    shuffled[out] = diffs[in];
+
+    out += 2;
+    if (out == 16)
+      out = 1;
   }
-  for (int c = 1; c < 16; c += 2) {
-    int b = len[2 | (c >> 3)];
-    int16_t diff = getDiff(pump, b);
-    diffs[c] = diff;
-  }
-  return diffs;
+
+  return shuffled;
 }
 
 inline __attribute__((always_inline)) void
