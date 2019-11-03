@@ -147,51 +147,65 @@ void SamsungV0Decompressor::decompressStrip(int row,
     }
 
     if (dir) {
-      // Upward prediction
-
       if (row < 2)
         ThrowRDE("Upward prediction for the first two rows. Raw corrupt");
 
       if (col + 16 >= out.width)
         ThrowRDE("Upward prediction for the last block of pixels. Raw corrupt");
 
-      // First we decode even pixels
+      std::array<int16_t, 16> diffs;
+
+      // First, decode all differences. They are stored interlaced,
+      // first for even pixels then for odd pixels.
       for (int c = 0; c < 16; c += 2) {
         int b = len[c >> 3];
         int16_t diff = getDiff(&bits, b);
-
-        out(row, col + c) = diff + out(row - 1, col + c);
+        diffs[c] = diff;
+      }
+      for (int c = 1; c < 16; c += 2) {
+        int b = len[2 | (c >> 3)];
+        int16_t diff = getDiff(&bits, b);
+        diffs[c] = diff;
       }
 
-      // Now we decode odd pixels
+      // Upward prediction
+      // Now, actually apply the differences.
+      for (int c = 0; c < 16; c += 2) {
+        out(row, col + c) = diffs[c] + out(row - 1, col + c);
+      }
       // Why on earth upward prediction only looks up 1 line above
       // is beyond me, it will hurt compression a deal.
       for (int c = 1; c < 16; c += 2) {
-        int b = len[2 | (c >> 3)];
-        int16_t diff = getDiff(&bits, b);
-
-        out(row, col + c) = diff + out(row - 2, col + c);
+        out(row, col + c) = diffs[c] + out(row - 2, col + c);
       }
     } else {
-      // Left to right prediction
-      // First we decode even pixels
-      int pred_left = col != 0 ? out(row, col - 2) : 128;
+      std::array<int16_t, 16> diffs;
+
+      // First, decode all differences. They are stored interlaced,
+      // first for even pixels then for odd pixels.
       for (int c = 0; c < 16; c += 2) {
         int b = len[c >> 3];
         int16_t diff = getDiff(&bits, b);
-
-        if (col + c < out.width)
-          out(row, col + c) = diff + pred_left;
+        diffs[c] = diff;
       }
-
-      // Now we decode odd pixels
-      pred_left = col != 0 ? out(row, col - 1) : 128;
       for (int c = 1; c < 16; c += 2) {
         int b = len[2 | (c >> 3)];
         int16_t diff = getDiff(&bits, b);
+        diffs[c] = diff;
+      }
 
+      // Now, actually apply the differences.
+      // Left to right prediction. First we decode even pixels
+      int pred_left = col != 0 ? out(row, col - 2) : 128;
+      for (int c = 0; c < 16; c += 2) {
         if (col + c < out.width)
-          out(row, col + c) = diff + pred_left;
+          out(row, col + c) = diffs[c] + pred_left;
+      }
+      // Now we decode odd pixels
+      pred_left = col != 0 ? out(row, col - 1) : 128;
+      for (int c = 1; c < 16; c += 2) {
+        if (col + c < out.width)
+          out(row, col + c) = diffs[c] + pred_left;
       }
     }
   }
