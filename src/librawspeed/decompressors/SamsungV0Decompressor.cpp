@@ -185,15 +185,15 @@ void SamsungV0Decompressor::decompressStrip(int row, const ByteStream& bs) {
       // Now, actually apply the differences.
       // Left to right prediction. First we decode even pixels
       int pred_left = col != 0 ? out(row, col - 2) : 128;
-      for (int c = 0; c < 16; c += 2) {
-        if (col + c < out.width)
-          out(row, col + c) = diffs[c] + pred_left;
+      const int colsToRemaining = out.width - col;
+      const int colsToFill = std::min(colsToRemaining, 16);
+      for (int c = 0; c < colsToFill; c += 2) {
+        out(row, col + c) = diffs[c] + pred_left;
       }
       // Now we decode odd pixels
       pred_left = col != 0 ? out(row, col - 1) : 128;
-      for (int c = 1; c < 16; c += 2) {
-        if (col + c < out.width)
-          out(row, col + c) = diffs[c] + pred_left;
+      for (int c = 1; c < colsToFill; c += 2) {
+        out(row, col + c) = diffs[c] + pred_left;
       }
     }
   }
