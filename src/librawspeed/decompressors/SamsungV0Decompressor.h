@@ -34,18 +34,23 @@ class RawImage;
 class SamsungV0Decompressor final : public AbstractSamsungDecompressor {
   std::vector<ByteStream> stripes;
 
+  std::array<int, 4> len;
+
   void computeStripes(ByteStream bso, ByteStream bsr);
 
-  void decompressStrip(int row, const ByteStream& bs) const;
+  void decompressStrip(int row, const ByteStream& bs);
 
   static inline __attribute__((always_inline)) int16_t
   getDiff(BitPumpMSB32* pump, int nbits);
+
+  inline __attribute__((always_inline)) std::array<int16_t, 16>
+  decodeDifferences(BitPumpMSB32* pump);
 
 public:
   SamsungV0Decompressor(const RawImage& image, const ByteStream& bso,
                         const ByteStream& bsr);
 
-  void decompress() const;
+  void decompress();
 };
 
 } // namespace rawspeed
