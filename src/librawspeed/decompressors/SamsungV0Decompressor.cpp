@@ -105,6 +105,39 @@ int16_t SamsungV0Decompressor::getDiff(BitPumpMSB32* bits, int nbits) {
   return signExtend(bits->getBits(nbits), nbits);
 }
 
+inline __attribute__((always_inline)) std::array<uint16_t, 16>
+SamsungV0Decompressor::prepareBaselineValues(int row, int col, bool dir) {
+  const Array2DRef<const uint16_t> img(mRaw->getU16DataAsUncroppedArray2DRef());
+
+  std::array<uint16_t, 16> baseline;
+
+  if (dir) {
+    // Upward prediction.
+    if (row < 2 || col + 16 >= img.width)
+      ThrowRDE("Upward prediction for the first two rows / last row block");
+
+    // The differences are specified as compared to the pixels of the previous
+    // row for even pixels, or to pixels from two rows above for odd pixels.
+    for (int c = 0; c < 16; ++c)
+      baseline[c] = img(row - 1 - (c & 1), col + c);
+
+    return baseline;
+  }
+
+  // Else we have left to right prediction.
+  // The differences are specified as compared to the last two pixels
+  // of the previous block, or to hardcoded init values.
+  const auto prev = [img, row, col]() -> std::array<uint16_t, 2> {
+    if (col == 0)
+      return {{128, 128}};
+    return {{img(row, col - 2), img(row, col - 1)}};
+  }();
+  for (int c = 0; c < 16; ++c)
+    baseline[c] = prev[c & 1];
+
+  return baseline;
+}
+
 inline __attribute__((always_inline)) std::array<int16_t, 16>
 SamsungV0Decompressor::decodeDifferences(BitPumpMSB32* pump) {
   std::array<int16_t, 16> diffs;
@@ -159,37 +192,19 @@ SamsungV0Decompressor::processBlock(BitPumpMSB32* pump, int row, int col) {
       ThrowRDE("Invalid bit length - not in [0, 16] range.");
   }
 
+  const std::array<uint16_t, 16> baseline =
+      prepareBaselineValues(row, col, dir);
   const std::array<int16_t, 16> diffs = decodeDifferences(pump);
 
-  if (dir) {
-    if (row < 2 || col + 16 >= out.width)
-      ThrowRDE("Upward prediction for the first two rows / last row block");
-
-    // Upward prediction. The differences are specified as compared to the
-    // previous row for even pixels, or two rows above for odd pixels.
-    const auto baseline = [out, row, col]() -> std::array<uint16_t, 16> {
-      std::array<uint16_t, 16> prev;
-      for (int c = 0; c < 16; ++c)
-        prev[c] = out(row - 1 - (c & 1), col + c);
-      return prev;
-    }();
-    // Now, actually apply the differences.
+  // Now, actually apply the differences.
+  const int colsToRemaining = out.width - col;
+  if (colsToRemaining >= 16) {
     for (int c = 0; c < 16; ++c)
       out(row, col + c) = diffs[c] + baseline[c];
   } else {
-    // Left to right prediction. The differences are specified as compared to
-    // the last two pixels of the previous block.
-    const auto baseline = [out, row, col]() -> std::array<uint16_t, 2> {
-      if (col == 0)
-        return {{128, 128}};
-      return {{out(row, col - 2), out(row, col - 1)}};
-    }();
-    const int colsToRemaining = out.width - col;
-    const int colsToFill = std::min(colsToRemaining, 16);
-    assert(colsToFill % 2 == 0);
-    // Now, actually apply the differences.
-    for (int c = 0; c < colsToFill; ++c)
-      out(row, col + c) = diffs[c] + baseline[c & 1];
+    assert(colsToRemaining % 2 == 0);
+    for (int c = 0; c < colsToRemaining; ++c)
+      out(row, col + c) = diffs[c] + baseline[c];
   }
 }
 

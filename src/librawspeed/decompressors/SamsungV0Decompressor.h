@@ -43,6 +43,9 @@ class SamsungV0Decompressor final : public AbstractSamsungDecompressor {
   static inline __attribute__((always_inline)) int16_t
   getDiff(BitPumpMSB32* pump, int nbits);
 
+  inline __attribute__((always_inline)) std::array<uint16_t, 16>
+  prepareBaselineValues(int row, int col, bool dir);
+
   inline __attribute__((always_inline)) std::array<int16_t, 16>
   decodeDifferences(BitPumpMSB32* pump);
 
