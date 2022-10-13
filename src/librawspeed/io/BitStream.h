@@ -120,7 +120,12 @@ template <typename Tag> struct BitStreamReplenisherBase {
   // nearing the end of the input buffer and can not just read
   // BitStreamTraits<Tag>::MaxProcessBytes from it, but have to read as much as
   // we can and fill rest with zeros.
-  std::array<uint8_t, BitStreamTraits<Tag>::MaxProcessBytes> tmp = {};
+  std::array<uint8_t,
+#if !defined(DEBUG)
+             2 *
+#endif
+                 BitStreamTraits<Tag>::MaxProcessBytes>
+      global_tmp = {};
 };
 
 template <typename Tag>
@@ -143,10 +148,13 @@ struct BitStreamForwardSequentialReplenisher final
   }
 
   inline const uint8_t* getInput() {
-#if !defined(DEBUG)
     // Do we have BitStreamTraits<Tag>::MaxProcessBytes or more bytes left in
     // the input buffer? If so, then we can just read from said buffer.
-    if (Base::pos + BitStreamTraits<Tag>::MaxProcessBytes <= Base::size)
+    const bool inbounds =
+        Base::pos + BitStreamTraits<Tag>::MaxProcessBytes <= Base::size;
+
+#if !defined(DEBUG)
+    if (inbounds)
       return Base::data + Base::pos;
 #endif
 
@@ -158,18 +166,52 @@ struct BitStreamForwardSequentialReplenisher final
     if (Base::pos > Base::size + 2 * BitStreamTraits<Tag>::MaxProcessBytes)
       ThrowIOE("Buffer overflow read in BitStream");
 
-    Base::tmp.fill(0);
+    // Given our current pos the buffer, can we directly load MaxProcessBytes?
+    // If not, point at the last MaxProcessBytes chunk of the input.
+    typename Base::size_type clamped_pos;
+    if (inbounds)
+      clamped_pos = Base::pos;
+    else
+      clamped_pos = Base::size - BitStreamTraits<Tag>::MaxProcessBytes;
+    assert(clamped_pos <= Base::pos);
+    assert(clamped_pos + BitStreamTraits<Tag>::MaxProcessBytes <= Base::size);
 
-    // How many bytes are left in input buffer?
-    // Since pos can be past-the-end we need to carefully handle overflow.
-    typename Base::size_type bytesRemaining =
-        (Base::pos < Base::size) ? Base::size - Base::pos : 0;
-    // And if we are not at the end of the input, we may have more than we need.
-    bytesRemaining = std::min<typename Base::size_type>(
-        BitStreamTraits<Tag>::MaxProcessBytes, bytesRemaining);
+    uint8_t* tmp;
+#if !defined(DEBUG)
+    assert(Base::global_tmp.size() ==
+           2 * BitStreamTraits<Tag>::MaxProcessBytes);
+    tmp = Base::global_tmp.data();
+#else
+    assert(Base::global_tmp.size() ==
+           1 * BitStreamTraits<Tag>::MaxProcessBytes);
+    std::array<uint8_t, 2 * BitStreamTraits<Tag>::MaxProcessBytes> local_tmp;
+    local_tmp.fill(0);
+    tmp = local_tmp.data();
+#endif
 
-    memcpy(Base::tmp.data(), Base::data + Base::pos, bytesRemaining);
+    // First, load the MaxProcessBytes chunk of the input.
+    // Some of the leading bytes may be unwanted padding that we'll drop later.
+    memcpy(tmp, Base::data + clamped_pos,
+           BitStreamTraits<Tag>::MaxProcessBytes);
+
+    // Now, how many leading padding bytes did we load, though?
+    typename Base::size_type num_leading_padding_bytes;
+    if (inbounds)
+      num_leading_padding_bytes = 0;
+    else
+      num_leading_padding_bytes = std::min<typename Base::size_type>(
+          BitStreamTraits<Tag>::MaxProcessBytes, Base::pos - clamped_pos);
+
+#if !defined(DEBUG)
+    return tmp + num_leading_padding_bytes;
+#else
+    // Ok, we *really* want to enforce bounds checking.
+    // Get rid of the unwanted leading padding bytes.
+    memcpy(Base::global_tmp.data(),
+           local_tmp.data() + num_leading_padding_bytes,
+           BitStreamTraits<Tag>::MaxProcessBytes);
     return Base::tmp.data();
+#endif
   }
 };
 
