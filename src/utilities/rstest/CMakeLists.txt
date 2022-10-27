@@ -43,8 +43,7 @@ endif()
 
 if(BUILD_BENCHMARKING)
   rawspeed_add_executable(MD5Benchmark md5.cpp MD5Benchmark.cpp)
-  target_include_directories(MD5Benchmark PRIVATE "${RAWSPEED_BINARY_DIR}/src")
-  target_link_libraries(MD5Benchmark benchmark)
+  target_link_libraries(MD5Benchmark rawspeed_bench)
   rawspeed_add_test(NAME benchmarks/rstest/MD5Benchmark COMMAND MD5Benchmark --help)
   set_tests_properties(benchmarks/rstest/MD5Benchmark PROPERTIES LABELS "benchmark;dummy")
 
