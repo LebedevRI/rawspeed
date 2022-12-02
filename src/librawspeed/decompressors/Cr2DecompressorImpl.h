@@ -204,6 +204,102 @@ public:
   }
 };
 
+class Cr2OutputFrameTileIterator final {
+  const iPoint2D& frame;
+  Cr2VerticalOutputStripIterator stripIter;
+  iPoint2D posInStrip = {0, 0};
+  iPoint2D framePos = {0, 0};
+
+  using iterator_category = std::input_iterator_tag;
+  using difference_type = std::ptrdiff_t;
+  using value_type = std::pair<iRectangle2D, bool>;
+  using pointer = const value_type*;   // Unusable, but must be here.
+  using reference = const value_type&; // Unusable, but must be here.
+
+public:
+  Cr2OutputFrameTileIterator(Cr2VerticalOutputStripIterator stripIter_,
+                             const iPoint2D& frame_)
+      : frame(frame_), stripIter(stripIter_) {}
+
+  value_type operator*() const {
+    const iRectangle2D outStrip = *stripIter;
+
+    assert(framePos.y < frame.y && "Frame overflow.");
+    int colsInCurrFrameRowRemaining = frame.x - framePos.x;
+    assert(colsInCurrFrameRowRemaining > 0 && "Frame row overshoot?");
+
+    iRectangle2D outTile;
+    outTile.pos = outStrip.pos + posInStrip;
+
+    assert(posInStrip.y < outStrip.getHeight() && "strip overflow.");
+
+    int colsInCurrStripRowRemaining = outStrip.getWidth() - posInStrip.x;
+    assert(colsInCurrStripRowRemaining > 0 && "strip row overshoot?");
+    if (int minCols =
+            std::min(colsInCurrStripRowRemaining, colsInCurrFrameRowRemaining);
+        minCols < outStrip.getWidth()) {
+      outTile.dim = iPoint2D(minCols, 1);
+    } else {
+      assert(posInStrip.x == 0 && "Should be at the beginning of slice's row");
+      int rowsInCurrStripRemaining = outStrip.getHeight() - posInStrip.y;
+      // NOTE: truncating division!
+      int maxFullStripRowsInCurrFrameRowRemaining =
+          colsInCurrFrameRowRemaining / outStrip.getWidth();
+      assert(maxFullStripRowsInCurrFrameRowRemaining > 0);
+      int minRows = std::min(rowsInCurrStripRemaining,
+                             maxFullStripRowsInCurrFrameRowRemaining);
+      outTile.dim = iPoint2D(outStrip.getWidth(), minRows);
+    }
+
+    assert(outTile.hasPositiveArea());
+    iPoint2D newFramePos = framePos + iPoint2D(outTile.dim.area(), 0);
+    (void)newFramePos;
+    assert(newFramePos.x <= frame.x && "Frame row overflow.");
+
+    return {outTile, framePos.x == 0};
+  }
+  Cr2OutputFrameTileIterator& operator++() {
+    const iRectangle2D outStrip = *stripIter;
+    const auto [currTile, ignore] = operator*();
+    auto numPixelsInCurrTile = currTile.dim.area();
+    framePos.x += numPixelsInCurrTile;
+    assert(framePos.x <= frame.x && "Frame width overflow?");
+    if (framePos.x == frame.x) {
+      ++framePos.y;
+      assert(framePos.y <= frame.y && "Frame height overflow?");
+      framePos.x = 0;
+    }
+    if (currTile.getHeight() != 1) {
+      assert(currTile.getWidth() == outStrip.getWidth());
+      assert(posInStrip.x == 0);
+      posInStrip.y += currTile.getHeight();
+    } else {
+      posInStrip.x += currTile.getWidth();
+      assert(posInStrip.x <= outStrip.getWidth());
+      if (posInStrip.x == outStrip.getWidth()) {
+        ++posInStrip.y;
+        posInStrip.x = 0;
+      }
+    }
+    assert(posInStrip.y <= outStrip.getHeight());
+    if (posInStrip.y == outStrip.getHeight()) {
+      assert(posInStrip.x == 0);
+      ++stripIter;
+      posInStrip.y = 0;
+    }
+    return *this;
+  }
+  friend bool operator==(const Cr2OutputFrameTileIterator& a,
+                         const Cr2OutputFrameTileIterator& b) {
+    assert(&a.frame == &b.frame && "Unrelated iterators.");
+    return a.stripIter == b.stripIter;
+  }
+  friend bool operator!=(const Cr2OutputFrameTileIterator& a,
+                         const Cr2OutputFrameTileIterator& b) {
+    return !(a == b);
+  }
+};
+
 template <typename HuffmanTable>
 iterator_range<Cr2SliceIterator> Cr2Decompressor<HuffmanTable>::getSlices() {
   return {Cr2SliceIterator(slicing.begin(), frame),
@@ -240,6 +336,14 @@ Cr2Decompressor<HuffmanTable>::getVerticalOutputStrips() {
                                          std::end(outputTiles)),
           Cr2VerticalOutputStripIterator(std::end(outputTiles),
                                          std::end(outputTiles))};
+}
+
+template <typename HuffmanTable>
+[[nodiscard]] iterator_range<Cr2OutputFrameTileIterator>
+Cr2Decompressor<HuffmanTable>::getOutputFrameTiles() {
+  auto verticalOutputStrips = getVerticalOutputStrips();
+  return {Cr2OutputFrameTileIterator(std::begin(verticalOutputStrips), frame),
+          Cr2OutputFrameTileIterator(std::end(verticalOutputStrips), frame)};
 }
 
 // NOLINTNEXTLINE: this is not really a header, inline namespace is fine.
@@ -409,48 +513,26 @@ void Cr2Decompressor<HuffmanTable>::decompressN_X_Y() {
 
   auto ht = getHuffmanTables<N_COMP>();
   auto pred = getInitialPreds<N_COMP>();
-  const auto* predNext = &out(0, 0);
+  iPoint2D prevPredPos = {0, 0};
 
   BitPumpJPEG bs(input);
-
-  int globalFrameCol = 0;
-  int globalFrameRow = 0;
-  (void)globalFrameRow;
-
-  auto frameColsRemaining = [&]() {
-    int r = frame.x - globalFrameCol;
-    assert(r >= 0);
-    return r;
-  };
-
-  for (iRectangle2D output : getVerticalOutputStrips()) {
+  for (auto [output, newFrameRow] : getOutputFrameTiles()) {
+    if (newFrameRow && prevPredPos != output.getTopLeft()) {
+      // Update predictor by going back exactly one (frame!) row.
+      for (int c = 0; c < N_COMP; ++c) {
+        int i = c == 0 ? c : dsc.groupSize - (N_COMP - c);
+        pred[c] = out(prevPredPos.y, dsc.groupSize * prevPredPos.x + i);
+      }
+      prevPredPos = output.getTopLeft();
+    }
     for (int row = output.getTop(), rowEnd = output.getBottom(); row != rowEnd;
          ++row) {
       for (int col = output.getLeft(), colEnd = output.getRight();
-           col != colEnd;) {
-        // check if we processed one full raw row worth of pixels
-        if (frameColsRemaining() == 0) {
-          // if yes -> update predictor by going back exactly one row,
-          // no matter where we are right now.
-          // makes no sense from an image compression point of view, ask
-          // Canon.
-          for (int c = 0; c < N_COMP; ++c)
-            pred[c] = predNext[c == 0 ? c : dsc.groupSize - (N_COMP - c)];
-          predNext = &out(row, dsc.groupSize * col);
-          ++globalFrameRow;
-          globalFrameCol = 0;
-          assert(globalFrameRow < frame.y && "Run out of frame");
-        }
-
-        // How many pixel can we decode until we finish the row of either
-        // the frame (i.e. predictor change time), or of the current slice?
-        for (int colFrameEnd = std::min(colEnd, col + frameColsRemaining());
-             col != colFrameEnd; ++col, ++globalFrameCol) {
-          for (int p = 0; p < dsc.groupSize; ++p) {
-            int c = p < dsc.pixelsPerGroup ? 0 : p - dsc.pixelsPerGroup + 1;
-            out(row, dsc.groupSize * col + p) = pred[c] +=
-                ((const HuffmanTable&)(ht[c])).decodeDifference(bs);
-          }
+           col != colEnd; ++col) {
+        for (int p = 0; p < dsc.groupSize; ++p) {
+          int c = p < dsc.pixelsPerGroup ? 0 : p - dsc.pixelsPerGroup + 1;
+          out(row, dsc.groupSize * col + p) = pred[c] +=
+              ((const HuffmanTable&)(ht[c])).decodeDifference(bs);
         }
       }
     }

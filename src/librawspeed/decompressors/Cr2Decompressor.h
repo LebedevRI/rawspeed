@@ -47,6 +47,7 @@ struct Cr2SliceWidthIterator;
 struct Cr2SliceIterator;
 struct Cr2OutputTileIterator;
 class Cr2VerticalOutputStripIterator;
+class Cr2OutputFrameTileIterator;
 
 class Cr2SliceWidths {
   int numSlices = 0;
@@ -162,6 +163,8 @@ private:
   [[nodiscard]] iterator_range<Cr2OutputTileIterator> getOutputTiles();
   [[nodiscard]] iterator_range<Cr2VerticalOutputStripIterator>
   getVerticalOutputStrips();
+  [[nodiscard]] iterator_range<Cr2OutputFrameTileIterator>
+  getOutputFrameTiles();
 
 public:
   Cr2Decompressor(
