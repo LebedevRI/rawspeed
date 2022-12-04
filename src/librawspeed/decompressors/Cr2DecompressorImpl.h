@@ -212,7 +212,7 @@ class Cr2OutputFrameTileIterator final {
 
   using iterator_category = std::input_iterator_tag;
   using difference_type = std::ptrdiff_t;
-  using value_type = std::pair<iRectangle2D, bool>;
+  using value_type = std::pair<int, iRectangle2D>;
   using pointer = const value_type*;   // Unusable, but must be here.
   using reference = const value_type&; // Unusable, but must be here.
 
@@ -256,11 +256,11 @@ public:
     (void)newFramePos;
     assert(newFramePos.x <= frame.x && "Frame row overflow.");
 
-    return {outTile, framePos.x == 0};
+    return {framePos.y, outTile};
   }
   Cr2OutputFrameTileIterator& operator++() {
     const iRectangle2D outStrip = *stripIter;
-    const auto [currTile, ignore] = operator*();
+    const auto [ignore, currTile] = operator*();
     auto numPixelsInCurrTile = currTile.dim.area();
     framePos.x += numPixelsInCurrTile;
     assert(framePos.x <= frame.x && "Frame width overflow?");
@@ -296,6 +296,40 @@ public:
   }
   friend bool operator!=(const Cr2OutputFrameTileIterator& a,
                          const Cr2OutputFrameTileIterator& b) {
+    return !(a == b);
+  }
+};
+
+struct Cr2FrameRowIterator final {
+  const int frameHeight;
+
+  int row;
+
+  using iterator_category = std::input_iterator_tag;
+  using difference_type = std::ptrdiff_t;
+  using value_type = int;
+  using pointer = const value_type*;   // Unusable, but must be here.
+  using reference = const value_type&; // Unusable, but must be here.
+
+  Cr2FrameRowIterator(int row_, const iPoint2D& frame)
+      : frameHeight(frame.y), row(row_) {}
+
+  value_type operator*() const {
+    assert(row < frameHeight);
+    return row;
+  }
+  Cr2FrameRowIterator& operator++() {
+    assert(row < frameHeight);
+    ++row;
+    return *this;
+  }
+  friend bool operator==(const Cr2FrameRowIterator& a,
+                         const Cr2FrameRowIterator& b) {
+    assert(a.frameHeight == b.frameHeight && "Unrelated iterators.");
+    return a.row == b.row;
+  }
+  friend bool operator!=(const Cr2FrameRowIterator& a,
+                         const Cr2FrameRowIterator& b) {
     return !(a == b);
   }
 };
@@ -344,6 +378,13 @@ Cr2Decompressor<HuffmanTable>::getOutputFrameTiles() {
   auto verticalOutputStrips = getVerticalOutputStrips();
   return {Cr2OutputFrameTileIterator(std::begin(verticalOutputStrips), frame),
           Cr2OutputFrameTileIterator(std::end(verticalOutputStrips), frame)};
+}
+
+template <typename HuffmanTable>
+[[nodiscard]] iterator_range<Cr2FrameRowIterator>
+Cr2Decompressor<HuffmanTable>::getFrameRows() {
+  return {Cr2FrameRowIterator(/*row=*/0, frame),
+          Cr2FrameRowIterator(/*row=*/frame.y, frame)};
 }
 
 // NOLINTNEXTLINE: this is not really a header, inline namespace is fine.
@@ -513,29 +554,53 @@ void Cr2Decompressor<HuffmanTable>::decompressN_X_Y() {
 
   auto ht = getHuffmanTables<N_COMP>();
   auto pred = getInitialPreds<N_COMP>();
-  iPoint2D prevPredPos = {0, 0};
+
+  std::vector<uint16_t> zzz;
+  zzz.resize(dsc.groupSize * frame.x);
 
   BitPumpJPEG bs(input);
-  for (auto [output, newFrameRow] : getOutputFrameTiles()) {
-    if (newFrameRow && prevPredPos != output.getTopLeft()) {
+
+  auto qq = getOutputFrameTiles();
+  auto it = std::begin(qq);
+  auto itEnd = std::end(qq);
+
+  int numFramePixelsRemaining = dim.area();
+  for (int frameRow : getFrameRows()) {
+    if (frameRow != 0) {
       // Update predictor by going back exactly one (frame!) row.
       for (int c = 0; c < N_COMP; ++c) {
         int i = c == 0 ? c : dsc.groupSize - (N_COMP - c);
-        pred[c] = out(prevPredPos.y, dsc.groupSize * prevPredPos.x + i);
+        pred[c] = zzz[i];
       }
-      prevPredPos = output.getTopLeft();
     }
-    for (int row = output.getTop(), rowEnd = output.getBottom(); row != rowEnd;
-         ++row) {
-      for (int col = output.getLeft(), colEnd = output.getRight();
-           col != colEnd; ++col) {
-        for (int p = 0; p < dsc.groupSize; ++p) {
-          int c = p < dsc.pixelsPerGroup ? 0 : p - dsc.pixelsPerGroup + 1;
-          out(row, dsc.groupSize * col + p) = pred[c] +=
-              ((const HuffmanTable&)(ht[c])).decodeDifference(bs);
+    int numPixelsInCurrFrameRow = std::min(frame.x, numFramePixelsRemaining);
+    zzz.resize(0);
+    zzz.resize(dsc.groupSize * numPixelsInCurrFrameRow);
+    for (int col = 0; col != numPixelsInCurrFrameRow; ++col) {
+      for (int p = 0; p < dsc.groupSize; ++p) {
+        int c = p < dsc.pixelsPerGroup ? 0 : p - dsc.pixelsPerGroup + 1;
+        zzz[dsc.groupSize * col + p] = pred[c] +=
+            ((const HuffmanTable&)(ht[c])).decodeDifference(bs);
+      }
+    }
+    numFramePixelsRemaining -= numPixelsInCurrFrameRow;
+    assert(numFramePixelsRemaining >= 0);
+
+    int z = 0;
+    for (; it != itEnd && (*it).first == frameRow; ++it) {
+      auto output = (*it).second;
+      for (int row = 0, rowEnd = output.getHeight(); row != rowEnd; ++row) {
+        for (int col = 0, colEnd = output.getWidth(); col != colEnd; ++col) {
+          for (int p = 0; p < dsc.groupSize; ++p, ++z) {
+            out(output.getTop() + row,
+                dsc.groupSize * (output.getLeft() + col) + p) = zzz[z];
+          }
         }
       }
     }
+
+    if (numFramePixelsRemaining == 0)
+      return;
   }
 }
 
