@@ -538,13 +538,70 @@ Cr2Decompressor<HuffmanTable>::getInitialPreds() const {
 
 template <typename HuffmanTable>
 template <int N_COMP, int X_S_F, int Y_S_F>
-void Cr2Decompressor<HuffmanTable>::decompressN_X_Y() {
+void Cr2Decompressor<HuffmanTable>::producer(int frameRow,
+                                             std::array<uint16_t, N_COMP> pred,
+                                             BitPumpJPEG bs) {
+  constexpr Dsc dsc({N_COMP, X_S_F, Y_S_F});
+  const auto ht = getHuffmanTables<N_COMP>();
+  int numFramePixelsRemaining = dim.area() - frame.x * frameRow;
+  int numPixelsInCurrFrameRow = std::min(frame.x, numFramePixelsRemaining);
+  std::vector<uint16_t> zzz;
+  zzz.resize(dsc.groupSize * numPixelsInCurrFrameRow);
+  for (int col = 0; col != numPixelsInCurrFrameRow; ++col) {
+    for (int p = 0; p < dsc.groupSize; ++p) {
+      int c = p < dsc.pixelsPerGroup ? 0 : p - dsc.pixelsPerGroup + 1;
+      zzz[dsc.groupSize * col + p] = pred[c] +=
+          ((const HuffmanTable&)(ht[c])).decodeDifference(bs);
+    }
+  }
+  numFramePixelsRemaining -= numPixelsInCurrFrameRow;
+  // Update predictor by going back exactly one (frame!) row.
+  for (int c = 0; c < N_COMP; ++c) {
+    int i = c == 0 ? c : dsc.groupSize - (N_COMP - c);
+    pred[c] = zzz[i];
+  }
+
+  if (numFramePixelsRemaining != 0) {
+#pragma omp task default(none) firstprivate(frameRow, pred, bs)
+    producer<N_COMP, X_S_F, Y_S_F>(frameRow + 1, pred, bs);
+  }
+
+  consumer<N_COMP, X_S_F, Y_S_F>(frameRow, zzz);
+}
+
+template <typename HuffmanTable>
+template <int N_COMP, int X_S_F, int Y_S_F>
+void Cr2Decompressor<HuffmanTable>::consumer(int frameRow,
+                                             const std::vector<uint16_t>& zzz) {
   const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
 
+  constexpr Dsc dsc({N_COMP, X_S_F, Y_S_F});
+
+  auto qq = getOutputFrameTiles();
+  auto it = std::begin(qq);
+  auto itEnd = std::end(qq);
+  while (it != itEnd && (*it).first != frameRow)
+    ++it;
+
+  int z = 0;
+  for (; it != itEnd && (*it).first == frameRow; ++it) {
+    auto output = (*it).second;
+    for (int row = 0, rowEnd = output.getHeight(); row != rowEnd; ++row) {
+      for (int col = 0, colEnd = output.getWidth(); col != colEnd; ++col) {
+        for (int p = 0; p < dsc.groupSize; ++p, ++z) {
+          out(output.getTop() + row,
+              dsc.groupSize * (output.getLeft() + col) + p) = zzz[z];
+        }
+      }
+    }
+  }
+}
+
+template <typename HuffmanTable>
+template <int N_COMP, int X_S_F, int Y_S_F>
+void Cr2Decompressor<HuffmanTable>::decompressN_X_Y() {
   // To understand the CR2 slice handling and sampling factor behavior, see
   // https://github.com/lclevy/libcraw2/blob/master/docs/cr2_lossless.pdf?raw=true
-
-  constexpr Dsc dsc({N_COMP, X_S_F, Y_S_F});
 
   // inner loop decodes one group of pixels at a time
   //  * for <N,1,1>: N  = N*1*1 (full raw)
@@ -552,55 +609,13 @@ void Cr2Decompressor<HuffmanTable>::decompressN_X_Y() {
   //  * for <3,2,2>: 12 = 3*2*2
   // and advances x by N_COMP*X_S_F and y by Y_S_F
 
-  auto ht = getHuffmanTables<N_COMP>();
-  auto pred = getInitialPreds<N_COMP>();
-
-  std::vector<uint16_t> zzz;
-  zzz.resize(dsc.groupSize * frame.x);
-
-  BitPumpJPEG bs(input);
-
-  auto qq = getOutputFrameTiles();
-  auto it = std::begin(qq);
-  auto itEnd = std::end(qq);
-
-  int numFramePixelsRemaining = dim.area();
-  for (int frameRow : getFrameRows()) {
-    if (frameRow != 0) {
-      // Update predictor by going back exactly one (frame!) row.
-      for (int c = 0; c < N_COMP; ++c) {
-        int i = c == 0 ? c : dsc.groupSize - (N_COMP - c);
-        pred[c] = zzz[i];
-      }
-    }
-    int numPixelsInCurrFrameRow = std::min(frame.x, numFramePixelsRemaining);
-    zzz.resize(0);
-    zzz.resize(dsc.groupSize * numPixelsInCurrFrameRow);
-    for (int col = 0; col != numPixelsInCurrFrameRow; ++col) {
-      for (int p = 0; p < dsc.groupSize; ++p) {
-        int c = p < dsc.pixelsPerGroup ? 0 : p - dsc.pixelsPerGroup + 1;
-        zzz[dsc.groupSize * col + p] = pred[c] +=
-            ((const HuffmanTable&)(ht[c])).decodeDifference(bs);
-      }
-    }
-    numFramePixelsRemaining -= numPixelsInCurrFrameRow;
-    assert(numFramePixelsRemaining >= 0);
-
-    int z = 0;
-    for (; it != itEnd && (*it).first == frameRow; ++it) {
-      auto output = (*it).second;
-      for (int row = 0, rowEnd = output.getHeight(); row != rowEnd; ++row) {
-        for (int col = 0, colEnd = output.getWidth(); col != colEnd; ++col) {
-          for (int p = 0; p < dsc.groupSize; ++p, ++z) {
-            out(output.getTop() + row,
-                dsc.groupSize * (output.getLeft() + col) + p) = zzz[z];
-          }
-        }
-      }
-    }
-
-    if (numFramePixelsRemaining == 0)
-      return;
+#pragma omp parallel default(none)
+#pragma omp single
+  {
+    BitPumpJPEG bs(input);
+#pragma omp task default(none) firstprivate(bs)
+    producer<N_COMP, X_S_F, Y_S_F>(/*frameRow=*/0, getInitialPreds<N_COMP>(),
+                                   bs);
   }
 }
 

@@ -28,6 +28,7 @@
 #include "decoders/RawDecoderException.h"    // for ThrowException, ThrowRDE
 #include "decompressors/DummyHuffmanTable.h" // for DummyHuffmanTable
 #include "decompressors/HuffmanTable.h" // for HuffmanTable, HuffmanTableLUT
+#include "io/BitPumpJPEG.h"             // for BitPumpJPEG, BitStream<>:...
 #include "io/ByteStream.h"              // for ByteStream
 #include <array>                        // for array
 #include <cassert>                      // for assert
@@ -156,6 +157,12 @@ private:
 
   template <int N_COMP>
   [[nodiscard]] std::array<uint16_t, N_COMP> getInitialPreds() const;
+
+  template <int N_COMP, int X_S_F, int Y_S_F>
+  void producer(int frameRow, std::array<uint16_t, N_COMP> pred,
+                BitPumpJPEG bs);
+  template <int N_COMP, int X_S_F, int Y_S_F>
+  void consumer(int frameRow, const std::vector<uint16_t>& zzz);
 
   template <int N_COMP, int X_S_F, int Y_S_F> void decompressN_X_Y();
 
