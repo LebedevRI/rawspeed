@@ -900,6 +900,20 @@ void VC5Decompressor::combineFinalLowpassBands() const noexcept {
   __builtin_unreachable();
 }
 
+struct Histogram {
+  std::array<uint64_t, 33> num{{}};
+  ~Histogram() {
+    for (int i = 0; i != 33; ++i) {
+      writeLog(DEBUG_PRIO::ERROR, "VC5-Histogram bit %u num %lu", i, num[i]);
+    }
+  }
+};
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wexit-time-destructors"
+#pragma GCC diagnostic ignored "-Wglobal-constructors"
+static Histogram hist;
+#pragma GCC diagnostic pop
+
 inline std::pair<int16_t /*value*/, unsigned int /*count*/>
 VC5Decompressor::getRLV(BitPumpMSB& bits) {
   unsigned int iTab;
@@ -916,6 +930,9 @@ VC5Decompressor::getRLV(BitPumpMSB& bits) {
   }
   if (iTab >= table17.length)
     ThrowRDE("Code not found in codebook");
+
+#pragma omp atomic update
+  ++hist.num[decompandedTable17[iTab].size];
 
   bits.skipBitsNoFill(decompandedTable17[iTab].size);
   int16_t value = decompandedTable17[iTab].value;
