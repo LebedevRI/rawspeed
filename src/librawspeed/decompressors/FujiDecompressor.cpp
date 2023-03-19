@@ -87,13 +87,6 @@ enum xt_lines {
 struct fuji_compressed_params {
   explicit fuji_compressed_params(const FujiDecompressor::FujiHeader& h);
 
-  std::vector<int8_t> q_table; /* quantization table */
-  std::array<int, 5> q_point;  /* quantization points */
-  int max_bits;
-  int min_value;
-  int raw_bits;
-  int total_values;
-  int maxDiff;
   uint16_t line_width;
 };
 
@@ -156,8 +149,6 @@ struct FujiStrip {
 
 fuji_compressed_params::fuji_compressed_params(
     const FujiDecompressor::FujiHeader& h) {
-  int cur_val;
-
   if ((h.block_size % 3 && h.raw_type == 16) ||
       (h.block_size & 1 && h.raw_type == 0)) {
     ThrowRDE("fuji_block_checks");
@@ -168,45 +159,40 @@ fuji_compressed_params::fuji_compressed_params(
   } else {
     line_width = h.block_size >> 1;
   }
+}
+
+struct fuji_decoding_params {
+  explicit fuji_decoding_params(int bits) noexcept;
+
+  std::array<int, 5> q_point; /* quantization points */
+  int max_bits;
+  int min_value;
+  int raw_bits;
+  int total_values;
+  int maxDiff;
+};
+
+template <int bits> struct fuji_quantization_table {
+  fuji_quantization_table<bits>() noexcept;
+
+  std::array<int8_t, 2 * (1 << bits)> q_table; /* quantization table */
+};
+
+fuji_decoding_params::fuji_decoding_params(int bits) noexcept {
+  assert((bits == 12 || bits == 14 || bits == 16) && "Unexpected bit depth");
 
   q_point[0] = 0;
   q_point[1] = 0x12;
   q_point[2] = 0x43;
   q_point[3] = 0x114;
-  q_point[4] = (1 << h.raw_bits) - 1;
+  q_point[4] = (1 << bits) - 1;
   min_value = 0x40;
 
-  cur_val = -q_point[4];
-  q_table.resize(2 * (1 << h.raw_bits));
-
-  for (int8_t* qt = &q_table[0]; cur_val <= q_point[4]; ++qt, ++cur_val) {
-    if (cur_val <= -q_point[3]) {
-      *qt = -4;
-    } else if (cur_val <= -q_point[2]) {
-      *qt = -3;
-    } else if (cur_val <= -q_point[1]) {
-      *qt = -2;
-    } else if (cur_val < 0) {
-      *qt = -1;
-    } else if (cur_val == 0) {
-      *qt = 0;
-    } else if (cur_val < q_point[1]) {
-      *qt = 1;
-    } else if (cur_val < q_point[2]) {
-      *qt = 2;
-    } else if (cur_val < q_point[3]) {
-      *qt = 3;
-    } else {
-      *qt = 4;
-    }
-  }
-
-  // populting gradients
-  if (q_point[4] == 0xFFFF) { // (1 << h.raw_bits) - 1
-    total_values = 0x10000;   // 1 << h.raw_bits
-    raw_bits = 16;            // h.raw_bits
-    max_bits = 64;            // h.raw_bits * (64 / h.raw_bits)
-    maxDiff = 1024;           // 1 << (h.raw_bits - 6)
+  if (q_point[4] == 0xFFFF) { // (1 << bits) - 1
+    total_values = 0x10000;   // 1 << bits
+    raw_bits = 16;            // bits
+    max_bits = 64;            // bits * (64 / bits)
+    maxDiff = 1024;           // 1 << (bits - 6)
   } else if (q_point[4] == 0x3FFF) {
     total_values = 0x4000;
     raw_bits = 14;
@@ -218,12 +204,53 @@ fuji_compressed_params::fuji_compressed_params(
     max_bits = 48; // out-of-family, there's greater pattern at play.
     maxDiff = 64;
 
-    ThrowRDE("Aha, finally, a 12-bit compressed RAF! Please consider providing "
-             "samples on <https://raw.pixls.us/>, thanks!");
+    assert(false &&
+           "Aha, finally, a 12-bit compressed RAF! Please consider providing "
+           "samples on <https://raw.pixls.us/>, thanks!");
   } else {
-    ThrowRDE("FUJI q_point");
+    assert(false && "Unexpected bit depth.");
   }
 }
+
+template <int bits>
+fuji_quantization_table<bits>::fuji_quantization_table() noexcept {
+  static_assert((bits == 12 || bits == 14 || bits == 16),
+                "Unexpected bit depth");
+  const fuji_decoding_params p(bits);
+
+  assert(q_table.size() == (2 * (1 << bits)));
+
+  // populating gradients
+  int cur_val = -p.q_point[4];
+  for (int8_t* qt = &q_table[0]; cur_val <= p.q_point[4]; ++qt, ++cur_val) {
+    if (cur_val <= -p.q_point[3]) {
+      *qt = -4;
+    } else if (cur_val <= -p.q_point[2]) {
+      *qt = -3;
+    } else if (cur_val <= -p.q_point[1]) {
+      *qt = -2;
+    } else if (cur_val < 0) {
+      *qt = -1;
+    } else if (cur_val == 0) {
+      *qt = 0;
+    } else if (cur_val < p.q_point[1]) {
+      *qt = 1;
+    } else if (cur_val < p.q_point[2]) {
+      *qt = 2;
+    } else if (cur_val < p.q_point[3]) {
+      *qt = 3;
+    } else {
+      *qt = 4;
+    }
+  }
+}
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wglobal-constructors"
+template <int bits> const fuji_decoding_params FujiParams(bits);
+
+template <int bits> const fuji_quantization_table<bits> FujiQuantTable;
+#pragma GCC diagnostic pop
 
 struct fuji_compressed_block {
   const Array2DRef<uint16_t> img;
@@ -256,19 +283,30 @@ struct fuji_compressed_block {
   static inline int fuji_zerobits(BitPumpMSB& pump);
   static int bitDiff(int value1, int value2);
 
+  template <int bits>
   [[nodiscard]] inline int fuji_decode_sample(int grad, int interp_val,
                                               std::array<int_pair, 41>& grads);
+
+  template <int bits>
   [[nodiscard]] inline int
   fuji_decode_sample_even(xt_lines c, int col, std::array<int_pair, 41>& grads);
+
+  template <int bits>
   [[nodiscard]] inline int
   fuji_decode_sample_odd(xt_lines c, int col, std::array<int_pair, 41>& grads);
 
+  template <int bits>
   [[nodiscard]] inline int fuji_quant_gradient(int v1, int v2) const;
 
+  template <int bits>
   [[nodiscard]] inline std::pair<int, int>
   fuji_decode_interpolation_even_inner(xt_lines c, int col) const;
+
+  template <int bits>
   [[nodiscard]] inline std::pair<int, int>
   fuji_decode_interpolation_odd_inner(xt_lines c, int col) const;
+
+  template <int bits>
   [[nodiscard]] inline int fuji_decode_interpolation_even(xt_lines c,
                                                           int col) const;
 
@@ -277,10 +315,14 @@ struct fuji_compressed_block {
   void fuji_extend_green() const;
   void fuji_extend_blue() const;
 
-  template <typename T>
-  inline void fuji_decode_block(T&& func_even, int cur_line);
-  void xtrans_decode_block(int cur_line);
-  void fuji_bayer_decode_block(int cur_line);
+  template <int bits, typename T>
+  inline void fuji_decode_block_impl(T&& func_even, int cur_line);
+
+  template <int bits> void xtrans_decode_block(int cur_line);
+
+  template <int bits> void fuji_bayer_decode_block(int cur_line);
+
+  void fuji_decode_block(int cur_line);
 };
 
 fuji_compressed_block::fuji_compressed_block(
@@ -314,11 +356,12 @@ void fuji_compressed_block::reset(const fuji_compressed_params& params) {
   for (xt_lines color : {R2, G2, B2})
     lines(color, lines.width - 1) = lines(color - 1, lines.width - 2);
 
+  const fuji_decoding_params p(header.raw_bits);
   for (int j = 0; j < 3; j++) {
     for (int i = 0; i < 41; i++) {
-      grad_even[j][i].value1 = params.maxDiff;
+      grad_even[j][i].value1 = p.maxDiff;
       grad_even[j][i].value2 = 1;
-      grad_odd[j][i].value1 = params.maxDiff;
+      grad_odd[j][i].value1 = p.maxDiff;
       grad_odd[j][i].value2 = 1;
     }
   }
@@ -431,20 +474,23 @@ fuji_compressed_block::bitDiff(int value1, int value2) {
   return std::min(decBits, 15);
 }
 
+template <int bits>
 __attribute__((always_inline)) int
 fuji_compressed_block::fuji_decode_sample(int grad, int interp_val,
                                           std::array<int_pair, 41>& grads) {
+  const fuji_decoding_params& params = FujiParams<bits>;
+
   int gradient = std::abs(grad);
 
   int sampleBits = fuji_zerobits(pump);
 
   int codeBits;
   int codeDelta;
-  if (sampleBits < common_info.max_bits - common_info.raw_bits - 1) {
+  if (sampleBits < params.max_bits - params.raw_bits - 1) {
     codeBits = bitDiff(grads[gradient].value1, grads[gradient].value2);
     codeDelta = sampleBits << codeBits;
   } else {
-    codeBits = common_info.raw_bits;
+    codeBits = params.raw_bits;
     codeDelta = 1;
   }
 
@@ -454,7 +500,7 @@ fuji_compressed_block::fuji_decode_sample(int grad, int interp_val,
     code = pump.getBitsNoFill(codeBits);
   code += codeDelta;
 
-  if (code < 0 || code >= common_info.total_values) {
+  if (code < 0 || code >= params.total_values) {
     ThrowRDE("fuji_decode_sample");
   }
 
@@ -466,7 +512,7 @@ fuji_compressed_block::fuji_decode_sample(int grad, int interp_val,
 
   grads[gradient].value1 += std::abs(code);
 
-  if (grads[gradient].value2 == common_info.min_value) {
+  if (grads[gradient].value2 == params.min_value) {
     grads[gradient].value1 >>= 1;
     grads[gradient].value2 >>= 1;
   }
@@ -480,23 +526,26 @@ fuji_compressed_block::fuji_decode_sample(int grad, int interp_val,
   }
 
   if (interp_val < 0) {
-    interp_val += common_info.total_values;
-  } else if (interp_val > common_info.q_point[4]) {
-    interp_val -= common_info.total_values;
+    interp_val += params.total_values;
+  } else if (interp_val > params.q_point[4]) {
+    interp_val -= params.total_values;
   }
 
   if (interp_val < 0)
     return 0;
 
-  return std::min(interp_val, common_info.q_point[4]);
+  return std::min(interp_val, params.q_point[4]);
 }
 
+template <int bits>
 __attribute__((always_inline)) int
 fuji_compressed_block::fuji_quant_gradient(int v1, int v2) const {
-  const auto& ci = common_info;
-  return 9 * ci.q_table[ci.q_point[4] + v1] + ci.q_table[ci.q_point[4] + v2];
+  const fuji_decoding_params& p = FujiParams<bits>;
+  const fuji_quantization_table<bits>& q = FujiQuantTable<bits>;
+  return 9 * q.q_table[p.q_point[4] + v1] + q.q_table[p.q_point[4] + v2];
 }
 
+template <int bits>
 __attribute__((always_inline)) std::pair<int, int>
 fuji_compressed_block::fuji_decode_interpolation_even_inner(xt_lines c,
                                                             int col) const {
@@ -527,10 +576,11 @@ fuji_compressed_block::fuji_decode_interpolation_even_inner(xt_lines c,
   int interp_val = Term0 + Term1 + Term2;
   interp_val >>= 2;
 
-  int grad = fuji_quant_gradient(Rb - Rf, Rc - Rb);
+  int grad = fuji_quant_gradient<bits>(Rb - Rf, Rc - Rb);
   return {grad, interp_val};
 }
 
+template <int bits>
 __attribute__((always_inline)) std::pair<int, int>
 fuji_compressed_block::fuji_decode_interpolation_odd_inner(xt_lines c,
                                                            int col) const {
@@ -547,28 +597,31 @@ fuji_compressed_block::fuji_decode_interpolation_odd_inner(xt_lines c,
   }
   interp_val >>= 1;
 
-  int grad = fuji_quant_gradient(Rb - Rc, Rc - Ra);
+  int grad = fuji_quant_gradient<bits>(Rb - Rc, Rc - Ra);
   return {grad, interp_val};
 }
 
+template <int bits>
 __attribute__((always_inline)) int
 fuji_compressed_block::fuji_decode_sample_even(
     xt_lines c, int col, std::array<int_pair, 41>& grads) {
-  auto [grad, interp_val] = fuji_decode_interpolation_even_inner(c, col);
-  return fuji_decode_sample(grad, interp_val, grads);
+  auto [grad, interp_val] = fuji_decode_interpolation_even_inner<bits>(c, col);
+  return fuji_decode_sample<bits>(grad, interp_val, grads);
 }
 
+template <int bits>
 __attribute__((always_inline)) int
 fuji_compressed_block::fuji_decode_sample_odd(xt_lines c, int col,
                                               std::array<int_pair, 41>& grads) {
-  auto [grad, interp_val] = fuji_decode_interpolation_odd_inner(c, col);
-  return fuji_decode_sample(grad, interp_val, grads);
+  auto [grad, interp_val] = fuji_decode_interpolation_odd_inner<bits>(c, col);
+  return fuji_decode_sample<bits>(grad, interp_val, grads);
 }
 
+template <int bits>
 __attribute__((always_inline)) int
 fuji_compressed_block::fuji_decode_interpolation_even(xt_lines c,
                                                       int col) const {
-  auto [grad, interp_val] = fuji_decode_interpolation_even_inner(c, col);
+  auto [grad, interp_val] = fuji_decode_interpolation_even_inner<bits>(c, col);
   return interp_val;
 }
 
@@ -591,10 +644,10 @@ void fuji_compressed_block::fuji_extend_blue() const {
   fuji_extend_generic(B2, B4);
 }
 
-template <typename T>
+template <int bits, typename T>
 __attribute__((always_inline)) void
-fuji_compressed_block::fuji_decode_block(T&& func_even,
-                                         [[maybe_unused]] int cur_line) {
+fuji_compressed_block::fuji_decode_block_impl(T&& func_even,
+                                              [[maybe_unused]] int cur_line) {
   assert(common_info.line_width % 2 == 0);
   const int line_width = common_info.line_width / 2;
 
@@ -621,7 +674,8 @@ fuji_compressed_block::fuji_decode_block(T&& func_even,
       if (i >= 4) {
         for (int comp = 0; comp != 2; comp++) {
           int& col = pos[comp].odd;
-          int sample = fuji_decode_sample_odd(c[comp], col, grad_odd[grad]);
+          int sample =
+              fuji_decode_sample_odd<bits>(c[comp], col, grad_odd[grad]);
           lines(c[comp], 1 + 2 * col + 1) = sample;
           ++col;
         }
@@ -690,32 +744,55 @@ fuji_compressed_block::fuji_decode_block(T&& func_even,
   }
 }
 
+template <int bits>
 void fuji_compressed_block::xtrans_decode_block(int cur_line) {
-  fuji_decode_block(
+  fuji_decode_block_impl<bits>(
       [this](xt_lines c, int col, std::array<int_pair, 41>& grads, int row,
              int i, int comp) {
         if ((comp == 0 && (row == 0 || (row == 2 && i % 2 == 0) ||
                            (row == 4 && i % 2 != 0) || row == 5)) ||
             (comp == 1 && (row == 1 || row == 2 || (row == 3 && i % 2 != 0) ||
                            (row == 5 && i % 2 == 0))))
-          return fuji_decode_interpolation_even(c, col);
+          return fuji_decode_interpolation_even<bits>(c, col);
         assert((comp == 0 && (row == 1 || (row == 2 && i % 2 != 0) ||
                               row == 3 || (row == 4 && i % 2 == 0))) ||
                (comp == 1 && (row == 0 || (row == 3 && i % 2 == 0) ||
                               row == 4 || (row == 5 && i % 2 != 0))));
-        return fuji_decode_sample_even(c, col, grads);
+        return fuji_decode_sample_even<bits>(c, col, grads);
       },
       cur_line);
 }
 
+template <int bits>
 void fuji_compressed_block::fuji_bayer_decode_block(int cur_line) {
-  fuji_decode_block(
+  fuji_decode_block_impl<bits>(
       [this](xt_lines c, int col, std::array<int_pair, 41>& grads,
              [[maybe_unused]] int row, [[maybe_unused]] int i,
              [[maybe_unused]] int comp) {
-        return fuji_decode_sample_even(c, col, grads);
+        return fuji_decode_sample_even<bits>(c, col, grads);
       },
       cur_line);
+}
+
+void fuji_compressed_block::fuji_decode_block(int cur_line) {
+  switch (header.raw_bits) {
+  case 14:
+    if (header.raw_type == 16) {
+      xtrans_decode_block<14>(cur_line);
+    } else {
+      fuji_bayer_decode_block<14>(cur_line);
+    }
+    return;
+  case 16:
+    if (header.raw_type == 16) {
+      xtrans_decode_block<16>(cur_line);
+    } else {
+      fuji_bayer_decode_block<16>(cur_line);
+    }
+    return;
+  default:
+    __builtin_unreachable();
+  }
 }
 
 void fuji_compressed_block::fuji_decode_strip(const FujiStrip& strip) {
@@ -729,11 +806,7 @@ void fuji_compressed_block::fuji_decode_strip(const FujiStrip& strip) {
   const std::array<i_pair, 3> colors = {{{R0, 5}, {G0, 8}, {B0, 5}}};
 
   for (int cur_line = 0; cur_line < strip.height(); cur_line++) {
-    if (header.raw_type == 16) {
-      xtrans_decode_block(cur_line);
-    } else {
-      fuji_bayer_decode_block(cur_line);
-    }
+    fuji_decode_block(cur_line);
 
     if (header.raw_type == 16) {
       copy_line_to_xtrans(strip, cur_line);
