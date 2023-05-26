@@ -22,17 +22,18 @@
 
 #pragma once
 
-#include "rawspeedconfig.h" // for RAWSPEED_READONLY
-#include "adt/Invariant.h"  // for invariant
-#include "common/Common.h"  // for bitwidth, extractHighBits
-#include "io/Buffer.h"      // for Buffer
-#include "io/ByteStream.h"  // for ByteStream
-#include "io/Endianness.h"  // for Endianness, Endianness::unknown
-#include "io/IOException.h" // for ThrowIOE
-#include <algorithm>        // for fill_n, min
-#include <array>            // for array
-#include <cstdint>          // for uint32_t, uint8_t, uint64_t
-#include <cstring>          // for memcpy
+#include "rawspeedconfig.h"          // for RAWSPEED_READONLY
+#include "adt/Invariant.h"           // for invariant
+#include "common/Common.h"           // for bitwidth, extractHighBits
+#include "common/ExceptionManager.h" // for ImmediateExceptionThrower
+#include "io/Buffer.h"               // for Buffer
+#include "io/ByteStream.h"           // for ByteStream
+#include "io/Endianness.h"           // for Endianness, Endianness::unknown
+#include "io/IOException.h"          // for ThrowIOE
+#include <algorithm>                 // for fill_n, min
+#include <array>                     // for array
+#include <cstdint>                   // for uint32_t, uint8_t, uint64_t
+#include <cstring>                   // for memcpy
 
 namespace rawspeed {
 
@@ -99,17 +100,24 @@ struct BitStreamCacheRightInLeftOut : BitStreamCacheBase {
   }
 };
 
-template <typename Tag> struct BitStreamReplenisherBase {
+template <typename Tag, typename ExceptionManager>
+struct BitStreamReplenisherBase {
+  std::reference_wrapper<std::remove_reference_t<ExceptionManager>>
+      exceptionManager;
+
   using size_type = uint32_t;
 
   const uint8_t* data;
   size_type size;
   unsigned pos = 0;
 
-  BitStreamReplenisherBase() = default;
+  explicit BitStreamReplenisherBase(ExceptionManager& exceptionManager_)
+      : exceptionManager(exceptionManager_) {}
 
-  explicit BitStreamReplenisherBase(Buffer input)
-      : data(input.getData(0, input.getSize())), size(input.getSize()) {
+  explicit BitStreamReplenisherBase(ExceptionManager& exceptionManager_,
+                                    Buffer input)
+      : exceptionManager(exceptionManager_),
+        data(input.getData(0, input.getSize())), size(input.getSize()) {
     if (size < BitStreamTraits<Tag>::MaxProcessBytes)
       ThrowIOE("Bit stream size is smaller than MaxProcessBytes");
   }
@@ -122,12 +130,10 @@ template <typename Tag> struct BitStreamReplenisherBase {
   std::array<uint8_t, BitStreamTraits<Tag>::MaxProcessBytes> tmp = {};
 };
 
-template <typename Tag>
+template <typename Tag, typename ExceptionManager>
 struct BitStreamForwardSequentialReplenisher final
-    : public BitStreamReplenisherBase<Tag> {
-  using Base = BitStreamReplenisherBase<Tag>;
-
-  BitStreamForwardSequentialReplenisher() = default;
+    : public BitStreamReplenisherBase<Tag, ExceptionManager> {
+  using Base = BitStreamReplenisherBase<Tag, ExceptionManager>;
 
   using Base::BitStreamReplenisherBase;
 
@@ -155,7 +161,7 @@ struct BitStreamForwardSequentialReplenisher final
     // Note that in order to keep all fill-level invariants we must allow to
     // over-read past-the-end a bit.
     if (Base::pos > Base::size + 2 * BitStreamTraits<Tag>::MaxProcessBytes)
-      ThrowIOE("Buffer overflow read in BitStream");
+      Base::exceptionManager.get().exceptionalSituationEncountered();
 
     Base::tmp.fill(0);
 
@@ -172,9 +178,19 @@ struct BitStreamForwardSequentialReplenisher final
   }
 };
 
+struct IOEThrower {
+  [[noreturn]] __attribute__((always_inline)) inline void operator()() {
+    ThrowIOE("Buffer overflow read in BitStream");
+  }
+};
+
 template <typename Tag, typename Cache,
-          typename Replenisher = BitStreamForwardSequentialReplenisher<Tag>>
+          typename ExceptionManager = ImmediateExceptionThrower<IOEThrower>,
+          typename Replenisher =
+              BitStreamForwardSequentialReplenisher<Tag, ExceptionManager>>
 class BitStream final {
+  ExceptionManager exceptionManager;
+
   Cache cache;
 
   Replenisher replenisher;
@@ -189,12 +205,17 @@ class BitStream final {
 public:
   using tag = Tag;
 
-  BitStream() = default;
+  BitStream() : exceptionManager(), replenisher(exceptionManager) {}
 
-  explicit BitStream(Buffer buf) : replenisher(buf) {}
+  explicit BitStream(Buffer buf,
+                     ExceptionManager exceptionManager_ = ExceptionManager())
+      : exceptionManager(exceptionManager_),
+        replenisher(exceptionManager, buf) {}
 
-  explicit BitStream(ByteStream s)
-      : BitStream(s.getSubView(s.getPosition(), s.getRemainSize())) {}
+  explicit BitStream(ByteStream s,
+                     ExceptionManager exceptionManager_ = ExceptionManager())
+      : BitStream(s.getSubView(s.getPosition(), s.getRemainSize()),
+                  exceptionManager_) {}
 
   inline void fill(uint32_t nbits = Cache::MaxGetBits) {
     invariant(nbits <= Cache::MaxGetBits);

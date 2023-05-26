@@ -10,6 +10,7 @@ FILE(GLOB SOURCES
   "DngOpcodes.h"
   "ErrorLog.cpp"
   "ErrorLog.h"
+  "ExceptionManager.h"
   "FloatingPoint.h"
   "GetNumberOfProcessorCores.cpp"
   "RawImage.cpp"
