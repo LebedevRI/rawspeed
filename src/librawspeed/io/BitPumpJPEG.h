@@ -32,10 +32,6 @@ namespace rawspeed {
 
 struct JPEGBitPumpTag;
 
-// The JPEG data is ordered in MSB bit order,
-// i.e. we push into the cache from the right and read it from the left
-using BitPumpJPEG = BitStream<JPEGBitPumpTag, BitStreamCacheRightInLeftOut>;
-
 template <> struct BitStreamTraits<JPEGBitPumpTag> final {
   static constexpr bool canUseWithPrefixCodeDecoder = true;
 
@@ -45,7 +41,21 @@ template <> struct BitStreamTraits<JPEGBitPumpTag> final {
   static constexpr int MaxProcessBytes = 8;
 };
 
-template <>
+// The JPEG data is ordered in MSB bit order,
+// i.e. we push into the cache from the right and read it from the left
+class BitPumpJPEG final : public BitStream<BitPumpJPEG, JPEGBitPumpTag,
+                                           BitStreamCacheRightInLeftOut> {
+  using Base =
+      BitStream<BitPumpJPEG, JPEGBitPumpTag, BitStreamCacheRightInLeftOut>;
+
+public:
+  using Base::Base;
+
+  size_type fillCache(const uint8_t* input);
+
+  [[nodiscard]] size_type getStreamPosition() const;
+};
+
 inline BitPumpJPEG::size_type BitPumpJPEG::fillCache(const uint8_t* input) {
   static_assert(BitStreamCacheBase::MaxGetBits >= 32, "check implementation");
 
@@ -99,7 +109,6 @@ inline BitPumpJPEG::size_type BitPumpJPEG::fillCache(const uint8_t* input) {
   return p;
 }
 
-template <>
 inline BitPumpJPEG::size_type BitPumpJPEG::getStreamPosition() const {
   // the current number of bytes we consumed -> at the end of the stream pos, it
   // points to the JPEG marker FF

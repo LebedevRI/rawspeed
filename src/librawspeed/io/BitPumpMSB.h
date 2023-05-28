@@ -29,11 +29,6 @@ namespace rawspeed {
 
 struct MSBBitPumpTag;
 
-// The MSB data is ordered in MSB bit order,
-// i.e. we push into the cache from the right and read it from the left
-
-using BitPumpMSB = BitStream<MSBBitPumpTag, BitStreamCacheRightInLeftOut>;
-
 template <> struct BitStreamTraits<MSBBitPumpTag> final {
   static constexpr bool canUseWithPrefixCodeDecoder = true;
 
@@ -41,7 +36,19 @@ template <> struct BitStreamTraits<MSBBitPumpTag> final {
   static constexpr int MaxProcessBytes = 4;
 };
 
-template <>
+// The MSB data is ordered in MSB bit order,
+// i.e. we push into the cache from the right and read it from the left
+class BitPumpMSB final : public BitStream<BitPumpMSB, MSBBitPumpTag,
+                                          BitStreamCacheRightInLeftOut> {
+  using Base =
+      BitStream<BitPumpMSB, MSBBitPumpTag, BitStreamCacheRightInLeftOut>;
+
+public:
+  using Base::Base;
+
+  size_type fillCache(const uint8_t* input);
+};
+
 inline BitPumpMSB::size_type BitPumpMSB::fillCache(const uint8_t* input) {
   static_assert(BitStreamCacheBase::MaxGetBits >= 32, "check implementation");
 

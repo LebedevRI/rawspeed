@@ -184,11 +184,11 @@ struct IOEThrower {
   }
 };
 
-template <typename Tag, typename Cache,
+template <typename Derived, typename Tag, typename Cache,
           typename ExceptionManager = ImmediateExceptionThrower<IOEThrower>,
           typename Replenisher =
               BitStreamForwardSequentialReplenisher<Tag, ExceptionManager>>
-class BitStream final {
+struct BitStream {
   ExceptionManager exceptionManager;
 
   Cache cache;
@@ -202,7 +202,6 @@ class BitStream final {
   // to process up to BitStreamTraits<Tag>::MaxProcessBytes bytes of input.
   size_type fillCache(const uint8_t* input);
 
-public:
   using tag = Tag;
 
   BitStream() : exceptionManager(), replenisher(exceptionManager) {}
@@ -223,7 +222,8 @@ public:
     if (cache.fillLevel >= nbits)
       return;
 
-    replenisher.markNumBytesAsConsumed(fillCache(replenisher.getInput()));
+    replenisher.markNumBytesAsConsumed(
+        static_cast<Derived*>(this)->fillCache(replenisher.getInput()));
   }
 
   // these methods might be specialized by implementations that support it
