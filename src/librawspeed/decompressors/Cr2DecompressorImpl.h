@@ -414,7 +414,7 @@ void Cr2Decompressor<PrefixCodeDecoder>::decompressN_X_Y() {
   auto pred = getInitialPreds<N_COMP>();
   const auto* predNext = &out(0, 0);
 
-  BitPumpJPEG bs(input);
+  BitPumpJPEG<> bs(input);
 
   int globalFrameCol = 0;
   int globalFrameRow = 0;

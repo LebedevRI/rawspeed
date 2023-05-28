@@ -43,19 +43,19 @@ struct OnesTag;
 struct SaturatedTag;
 
 template <>
-const std::array<uint8_t, 8> Pattern<BitPumpJPEG, OnesTag>::Data = {
+const std::array<uint8_t, 8> Pattern<BitPumpJPEG<>, OnesTag>::Data = {
     {/* [Byte0 Byte1 Byte2 Byte3] */
      /* Byte: [Bit0 .. Bit7] */
      0b10100100, 0b01000010, 0b00001000, 0b00011111}};
-template <> uint32_t Pattern<BitPumpJPEG, OnesTag>::data(int index) {
+template <> uint32_t Pattern<BitPumpJPEG<>, OnesTag>::data(int index) {
   const auto set = GenOnesBE(1, 0);
   return set[index];
 }
 
 template <>
-const std::array<uint8_t, 8> Pattern<BitPumpJPEG, InvOnesTag>::Data = {
+const std::array<uint8_t, 8> Pattern<BitPumpJPEG<>, InvOnesTag>::Data = {
     {0b11010010, 0b00100001, 0b00000100, 0b00001111}};
-template <> uint32_t Pattern<BitPumpJPEG, InvOnesTag>::data(int index) {
+template <> uint32_t Pattern<BitPumpJPEG<>, InvOnesTag>::data(int index) {
   const auto set = GenOnesBE(0, -1);
   return set[index];
 }
@@ -63,10 +63,10 @@ template <> uint32_t Pattern<BitPumpJPEG, InvOnesTag>::data(int index) {
 // If 0xFF0x00 byte sequence is found, it is just 0xFF, i.e. 0x00 is ignored.
 // So if we want 0xFF, we need to append 0x00 byte
 template <>
-const std::array<uint8_t, 8> Pattern<BitPumpJPEG, SaturatedTag>::Data{
+const std::array<uint8_t, 8> Pattern<BitPumpJPEG<>, SaturatedTag>::Data{
     {uint8_t(~0U), 0, uint8_t(~0U), 0, uint8_t(~0U), 0, uint8_t(~0U), 0}};
 
-INSTANTIATE_TYPED_TEST_CASE_P(JPEG, BitPumpTest, Patterns<BitPumpJPEG>);
+INSTANTIATE_TYPED_TEST_CASE_P(JPEG, BitPumpTest, Patterns<BitPumpJPEG<>>);
 
 TEST(BitPumpJPEGTest, 0xFF0x00Is0xFFTest) {
   // If 0xFF0x00 byte sequence is found, it is just 0xFF, i.e. 0x00 is ignored.
@@ -79,7 +79,7 @@ TEST(BitPumpJPEGTest, 0xFF0x00Is0xFFTest) {
     const DataBuffer db(b, e);
     const ByteStream bs(db);
 
-    BitPumpJPEG p(bs);
+    BitPumpJPEG<> p(bs);
 
     ASSERT_EQ(p.getBits(8), 0xFF);
 
@@ -100,7 +100,7 @@ TEST(BitPumpJPEGTest, 0xFF0xXXIsTheEndTest) {
       const DataBuffer db(b, e);
       const ByteStream bs(db);
 
-      BitPumpJPEG p(bs);
+      BitPumpJPEG<> p(bs);
 
       for (int cnt = 0; cnt <= 64 + 32 - 1; cnt++)
         ASSERT_EQ(p.getBits(1), 0);

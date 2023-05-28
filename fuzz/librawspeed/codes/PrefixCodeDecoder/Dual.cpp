@@ -141,7 +141,7 @@ template <typename CodeTag> static void checkFlavour(rawspeed::ByteStream bs) {
     checkPump<rawspeed::BitPumpMSB32>(bs0, bs1, ht0, ht1);
     break;
   case 2:
-    checkPump<rawspeed::BitPumpJPEG>(bs0, bs1, ht0, ht1);
+    checkPump<rawspeed::BitPumpJPEG<>>(bs0, bs1, ht0, ht1);
     break;
   default:
     ThrowRSE("Unknown bit pump");

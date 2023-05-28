@@ -43,10 +43,14 @@ template <> struct BitStreamTraits<JPEGBitPumpTag> final {
 
 // The JPEG data is ordered in MSB bit order,
 // i.e. we push into the cache from the right and read it from the left
-class BitPumpJPEG final : public BitStream<BitPumpJPEG, JPEGBitPumpTag,
-                                           BitStreamCacheRightInLeftOut> {
-  using Base =
-      BitStream<BitPumpJPEG, JPEGBitPumpTag, BitStreamCacheRightInLeftOut>;
+template <typename ExceptionManager = ImmediateExceptionThrower<IOEThrower>>
+class BitPumpJPEG final
+    : public BitStream<BitPumpJPEG<ExceptionManager>, JPEGBitPumpTag,
+                       BitStreamCacheRightInLeftOut, ExceptionManager> {
+  using Base = BitStream<BitPumpJPEG<ExceptionManager>, JPEGBitPumpTag,
+                         BitStreamCacheRightInLeftOut, ExceptionManager>;
+
+  using size_type = typename Base::size_type;
 
 public:
   using Base::Base;
@@ -56,12 +60,16 @@ public:
   [[nodiscard]] size_type getStreamPosition() const;
 };
 
-inline BitPumpJPEG::size_type BitPumpJPEG::fillCache(const uint8_t* input) {
-  static_assert(BitStreamCacheBase::MaxGetBits >= 32, "check implementation");
+template <typename ExceptionManager>
+inline typename BitPumpJPEG<ExceptionManager>::size_type
+BitPumpJPEG<ExceptionManager>::fillCache(const uint8_t* input) {
+  static_assert(BitStreamCacheBase::MaxGetBits >= 32, "check  implementation");
 
   std::array<uint8_t, BitStreamTraits<JPEGBitPumpTag>::MaxProcessBytes>
       prefetch;
   std::copy_n(input, prefetch.size(), prefetch.begin());
+
+  auto& cache = Base::cache;
 
   // short-cut path for the most common case (no FF marker in the next 4 bytes)
   // this is slightly faster than the else-case alone.
@@ -102,17 +110,19 @@ inline BitPumpJPEG::size_type BitPumpJPEG::fillCache(const uint8_t* input) {
 
         // No further reading from this buffer shall happen. Do signal that by
         // claiming that we have consumed all the remaining bytes of the buffer.
-        return getRemainingSize();
+        return Base::getRemainingSize();
       }
     }
   }
   return p;
 }
 
-inline BitPumpJPEG::size_type BitPumpJPEG::getStreamPosition() const {
+template <typename ExceptionManager>
+inline typename BitPumpJPEG<ExceptionManager>::size_type
+BitPumpJPEG<ExceptionManager>::getStreamPosition() const {
   // the current number of bytes we consumed -> at the end of the stream pos, it
   // points to the JPEG marker FF
-  return getInputPosition();
+  return Base::getInputPosition();
 }
 
 } // namespace rawspeed

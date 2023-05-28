@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
   REGISTER_PUMP(BitPumpMSB);
   REGISTER_PUMP(BitPumpMSB16);
   REGISTER_PUMP(BitPumpMSB32);
-  REGISTER_PUMP(BitPumpJPEG);
+  REGISTER_PUMP(BitPumpJPEG<>);
 
   benchmark::Initialize(&argc, argv);
   benchmark::RunSpecifiedBenchmarks();
