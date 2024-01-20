@@ -59,8 +59,6 @@ public:
   }
 };
 
-class BitStreamerJPEG;
-
 template <> struct BitStreamerTraits<BitStreamerJPEG> final {
   static constexpr bool canUseWithPrefixCodeDecoder = true;
 
@@ -90,8 +88,8 @@ public:
 };
 
 // NOTE: on average, probability of encountering an `0xFF` byte
-// is ~0.51% (1 in ~197), only ~2.02% (1 in ~50) of 4-byte blocks will contain
-// an `0xFF` byte, and out of *those* blocks, only ~0.77% (1 in ~131)
+// is ~0.48% (1 in ~209), only ~1.90% (1 in ~53) of 4-byte blocks will contain
+// an `0xFF` byte, and out of *those* blocks, only ~0.72% (1 in ~139)
 // will contain more than one `0xFF` byte.
 
 inline BitStreamerJPEG::size_type

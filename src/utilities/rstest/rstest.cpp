@@ -78,6 +78,16 @@ using std::left;
 using std::setw;
 #endif
 
+#include "io/BitStreamer.h"
+
+namespace rawspeed {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wexit-time-destructors"
+#pragma GCC diagnostic ignored "-Wglobal-constructors"
+rawspeed::Histogram hist;
+#pragma GCC diagnostic pop
+} // namespace rawspeed
+
 namespace rawspeed::rstest {
 
 std::string img_hash(const rawspeed::RawImage& r);

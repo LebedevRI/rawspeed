@@ -143,6 +143,25 @@ struct BitStreamerCacheRightInLeftOut final : BitStreamerCacheBase {
   }
 };
 
+struct Histogram {
+  std::array<uint64_t, 256> num{{}};
+  std::array<uint64_t, 256> ff00cnt{{}};
+  ~Histogram() {
+    for (int i = 0; i != 256; ++i) {
+      writeLog(DEBUG_PRIO::ERROR, "LJPEG-Histogram bitval 0x%x num %lu", i,
+               num[i]);
+    }
+    for (int i = 0; i != 256; ++i) {
+      writeLog(DEBUG_PRIO::ERROR, "LJPEG-Histogram ff00cnt %u num %lu", i,
+               ff00cnt[i]);
+    }
+  }
+};
+
+class BitStreamerJPEG;
+
+extern Histogram hist;
+
 template <typename Tag> struct BitStreamerReplenisherBase {
   using size_type = int32_t;
 
@@ -152,6 +171,58 @@ template <typename Tag> struct BitStreamerReplenisherBase {
   void establishClassInvariants() const noexcept;
 
   BitStreamerReplenisherBase() = delete;
+
+  BitStreamerReplenisherBase(const BitStreamerReplenisherBase&) = default;
+  BitStreamerReplenisherBase(BitStreamerReplenisherBase&&) = default;
+
+  BitStreamerReplenisherBase&
+  operator=(const BitStreamerReplenisherBase&) = default;
+  BitStreamerReplenisherBase& operator=(BitStreamerReplenisherBase&&) = default;
+
+  ~BitStreamerReplenisherBase() {
+    if (std::same_as<Tag, BitStreamerJPEG>) {
+      auto used =
+          input.getCrop(/*offset=*/0, std::min<unsigned>(input.size(), pos));
+      for (int i = 0; i < used.size();) {
+        const uint8_t byte = used(i);
+
+        int Num0xFF00 = 0;
+        if (byte != 0xFF) {
+          ++i;
+        } else {
+          for (; i < used.size(); i += 2) {
+            if (used(i + 0) != 0xFF)
+              break;
+            if (!((i + 1) < used.size())) {
+              i = used.size();
+              break;
+            }
+            if (used(i + 0) == 0xFF && used(i + 1) != 0x00) {
+              i = used.size();
+              break;
+            }
+            if (used(i + 0) == 0xFF && used(i + 1) == 0x00)
+              ++Num0xFF00;
+          }
+        }
+        invariant(Num0xFF00 <= 255);
+
+        if (byte != 0xFF || Num0xFF00 != 0) {
+#ifdef HAVE_OPENMP
+#pragma omp atomic update
+#endif
+          ++hist.num[byte];
+        }
+
+        if (Num0xFF00 != 0) {
+#ifdef HAVE_OPENMP
+#pragma omp atomic update
+#endif
+          ++hist.ff00cnt[Num0xFF00];
+        }
+      }
+    }
+  }
 
   inline explicit BitStreamerReplenisherBase(Array1DRef<const uint8_t> input_)
       : input(input_) {
