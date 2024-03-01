@@ -55,10 +55,10 @@ public:
   OlympusDifferenceDecoder(const SimpleLUT<int8_t, 12>& numLZ_)
       : numLZ(numLZ_) {}
 
-  inline __attribute__((always_inline)) int getDiff(BitStreamerMSB& bits);
+  inline __attribute__((always_inline)) int16_t getDiff(BitStreamerMSB& bits);
 };
 
-inline __attribute__((always_inline)) int
+inline __attribute__((always_inline)) int16_t
 OlympusDifferenceDecoder::getDiff(BitStreamerMSB& bits) {
   bits.fill();
 
@@ -93,7 +93,15 @@ OlympusDifferenceDecoder::getDiff(BitStreamerMSB& bits) {
   carry[1] = (diff * 3 + carry[1]) >> 5;
   carry[2] = carry[0] > 16 ? 0 : carry[2] + 1;
 
-  return (diff * 4) | low;
+  diff *= 4;
+  diff |= low;
+
+  // This is a 12-bit raw format. Pixel values are in [0, 4095],
+  // therefore the largest possible differences are [-4095, +4095],
+  // which means (valid) difference is 13-bit signed integer.
+  // That being said, for corrupted files, it can be larger.
+
+  return static_cast<int16_t>(diff);
 }
 
 class OlympusDecompressorImpl final : public AbstractDecompressor {
