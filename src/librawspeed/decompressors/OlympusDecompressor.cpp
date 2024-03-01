@@ -125,7 +125,8 @@ class OlympusDecompressorImpl final : public AbstractDecompressor {
                   BitStreamerMSB& bits, int row, int firstGroup,
                   int lastGroup) const;
 
-  void decompressRow(BitStreamerMSB& bits, int row) const;
+  __attribute__((noinline)) void decompressRow(BitStreamerMSB& bits,
+                                               int row) const;
 
 public:
   explicit OlympusDecompressorImpl(RawImage img) : mRaw(std::move(img)) {}
@@ -225,8 +226,8 @@ OlympusDecompressorImpl::decompressBlock(
   predictBlock(row, firstGroup, lastGroup);
 }
 
-void OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits,
-                                            int row) const {
+__attribute__((noinline)) void
+OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits, int row) const {
   const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
 
   invariant(out.width() > 0);
