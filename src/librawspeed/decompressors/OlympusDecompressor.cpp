@@ -241,9 +241,9 @@ OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits, int row) const {
   // but small-enough to fully fit into CPU L1d cache.
   constexpr int L1d = 32 * 1024; // FIXME: get actual value at run-time.
   constexpr int blockSize =
-      roundUpDivision(L1d, (1U << 7U) * (2 * sizeof(int16_t)));
-  // Going to `1<<8` instead of `1<<7` results in worse perf,
-  // going to `1<<6` does not improve perf, so it's a middle ground.
+      roundUpDivision(L1d, (1U << 6U) * (2 * sizeof(int16_t)));
+  // Going to `1<<7` instead of `1<<6` results in worse perf,
+  // going to `1<<5` does not really improve perf, so it's a middle ground.
 
   const auto numBlocks =
       implicit_cast<int>(roundUpDivision(numGroups, blockSize));
