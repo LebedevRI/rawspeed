@@ -129,6 +129,9 @@ class OlympusDecompressorImpl final : public AbstractDecompressor {
                                                           int group) const;
 
   inline __attribute__((always_inline)) void
+  predictBlock(int row, int firstGroup, int lastGroup) const;
+
+  inline __attribute__((always_inline)) void
   decompressGroup(std::array<OlympusDifferenceDecoder, 2>& acarry,
                   BitStreamerMSB& bits, int row, int group) const;
 
@@ -218,11 +221,18 @@ OlympusDecompressorImpl::predictGroup(int row, int group) const {
 }
 
 inline __attribute__((always_inline)) void
+OlympusDecompressorImpl::predictBlock(int row, int firstGroup,
+                                      int lastGroup) const {
+  for (int group = firstGroup; group != lastGroup; ++group)
+    predictGroup(row, group);
+}
+
+inline __attribute__((always_inline)) void
 OlympusDecompressorImpl::decompressGroup(
     std::array<OlympusDifferenceDecoder, 2>& acarry, BitStreamerMSB& bits,
     int row, int group) const {
   decodeDiffBlock(acarry, bits, row, group, group + 1);
-  predictGroup(row, group);
+  predictBlock(row, group, group + 1);
 }
 
 void OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits,
