@@ -67,11 +67,10 @@ OlympusDifferenceDecoder::getDiff(BitStreamerMSB& bits) {
   int b = bits.peekBitsNoFill(15);
   int sign = (b >> 14) * -1;
   int low = (b >> 12) & 3;
-  int numLeadingZeros = 12 - numActiveBits(implicit_cast<unsigned>(b & 4095));
 
   int highBits;
   // Skip bytes used above or read bits
-  if (numLeadingZeros == 12) {
+  if (!(b & 4095)) {
     bits.skipBitsNoFill(15);
     int numHighBits = 15 - numLowBits;
     assert(numHighBits >= 1);
@@ -79,6 +78,7 @@ OlympusDifferenceDecoder::getDiff(BitStreamerMSB& bits) {
     highBits = bits.peekBitsNoFill(numHighBits);
     bits.skipBitsNoFill(1 + numHighBits);
   } else {
+    int numLeadingZeros = 12 - numActiveBits(implicit_cast<unsigned>(b & 4095));
     bits.skipBitsNoFill(numLeadingZeros + 1 + 3);
     highBits = numLeadingZeros;
   }
