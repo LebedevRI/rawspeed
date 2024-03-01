@@ -27,6 +27,7 @@
 #include "adt/Invariant.h"
 #include "adt/Point.h"
 #include "bitstreams/BitStreamerMSB.h"
+#include "common/Common.h"
 #include "common/RawImage.h"
 #include "common/SimpleLUT.h"
 #include "decoders/RawDecoderException.h"
@@ -132,8 +133,9 @@ class OlympusDecompressorImpl final : public AbstractDecompressor {
   predictBlock(int row, int firstGroup, int lastGroup) const;
 
   inline __attribute__((always_inline)) void
-  decompressGroup(std::array<OlympusDifferenceDecoder, 2>& acarry,
-                  BitStreamerMSB& bits, int row, int group) const;
+  decompressBlock(std::array<OlympusDifferenceDecoder, 2>& acarry,
+                  BitStreamerMSB& bits, int row, int firstGroup,
+                  int lastGroup) const;
 
   void decompressRow(BitStreamerMSB& bits, int row) const;
 
@@ -228,11 +230,11 @@ OlympusDecompressorImpl::predictBlock(int row, int firstGroup,
 }
 
 inline __attribute__((always_inline)) void
-OlympusDecompressorImpl::decompressGroup(
+OlympusDecompressorImpl::decompressBlock(
     std::array<OlympusDifferenceDecoder, 2>& acarry, BitStreamerMSB& bits,
-    int row, int group) const {
-  decodeDiffBlock(acarry, bits, row, group, group + 1);
-  predictBlock(row, group, group + 1);
+    int row, int firstGroup, int lastGroup) const {
+  decodeDiffBlock(acarry, bits, row, firstGroup, lastGroup);
+  predictBlock(row, firstGroup, lastGroup);
 }
 
 void OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits,
@@ -245,8 +247,18 @@ void OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits,
   std::array<OlympusDifferenceDecoder, 2> acarry{numLZ, numLZ};
 
   const int numGroups = out.width() / 2;
-  for (int group = 0; group != numGroups; ++group) {
-    decompressGroup(acarry, bits, row, group);
+
+  // It's best to process pixels in blocks, that are large-ish,
+  // but small-enough to fully fit into CPU L1d cache.
+  constexpr int blockSize = 1;
+
+  const auto numBlocks =
+      implicit_cast<int>(roundUpDivision(numGroups, blockSize));
+
+  for (int block = 0; block != numBlocks; ++block) {
+    int firstGroup = blockSize * block;
+    int lastGroup = std::min(firstGroup + blockSize, numGroups);
+    decompressBlock(acarry, bits, row, firstGroup, lastGroup);
   }
 }
 
