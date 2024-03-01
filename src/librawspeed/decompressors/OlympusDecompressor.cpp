@@ -29,7 +29,6 @@
 #include "bitstreams/BitStreamerMSB.h"
 #include "common/Common.h"
 #include "common/RawImage.h"
-#include "common/SimpleLUT.h"
 #include "decoders/RawDecoderException.h"
 #include "decompressors/AbstractDecompressor.h"
 #include "io/ByteStream.h"
@@ -37,7 +36,6 @@
 #include <array>
 #include <cassert>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <utility>
@@ -47,14 +45,10 @@ namespace rawspeed {
 namespace {
 
 class OlympusDifferenceDecoder final {
-  const SimpleLUT<int8_t, 12>& numLZ;
-
   std::array<int, 3> carry{{}};
 
 public:
-  // NOLINTNEXTLINE(google-explicit-constructor)
-  OlympusDifferenceDecoder(const SimpleLUT<int8_t, 12>& numLZ_)
-      : numLZ(numLZ_) {}
+  OlympusDifferenceDecoder() = default;
 
   inline __attribute__((always_inline)) int16_t getDiff(BitStreamerMSB& bits);
 };
@@ -73,7 +67,7 @@ OlympusDifferenceDecoder::getDiff(BitStreamerMSB& bits) {
   int b = bits.peekBitsNoFill(15);
   int sign = (b >> 14) * -1;
   int low = (b >> 12) & 3;
-  int numLeadingZeros = numLZ[b & 4095];
+  int numLeadingZeros = 12 - numActiveBits(implicit_cast<unsigned>(b & 4095));
 
   int highBits;
   // Skip bytes used above or read bits
@@ -107,12 +101,6 @@ OlympusDifferenceDecoder::getDiff(BitStreamerMSB& bits) {
 
 class OlympusDecompressorImpl final : public AbstractDecompressor {
   RawImage mRaw;
-
-  // A table to quickly look up the number of leading zeros in a value.
-  const SimpleLUT<int8_t, 12> numLZ{
-      [](size_t i, [[maybe_unused]] unsigned tableSize) {
-        return 12 - numActiveBits(i);
-      }};
 
   static __attribute__((always_inline)) int getPred(Array2DRef<uint16_t> out,
                                                     int row, int col);
@@ -244,7 +232,7 @@ void OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits,
   invariant(out.width() > 0);
   invariant(out.width() % 2 == 0);
 
-  std::array<OlympusDifferenceDecoder, 2> acarry{numLZ, numLZ};
+  std::array<OlympusDifferenceDecoder, 2> acarry;
 
   const int numGroups = out.width() / 2;
 
