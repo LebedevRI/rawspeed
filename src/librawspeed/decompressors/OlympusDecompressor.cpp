@@ -125,8 +125,14 @@ class OlympusDecompressorImpl final : public AbstractDecompressor {
                   BitStreamerMSB& bits, int row, int firstGroup,
                   int lastGroup) const;
 
-  __attribute__((noinline)) void decompressRow(BitStreamerMSB& bits,
-                                               int row) const;
+  inline __attribute__((always_inline)) void
+  decompressRowImpl(BitStreamerMSB& bits, int row) const;
+
+  __attribute__((noinline)) void decompressFirstRow(BitStreamerMSB& bits,
+                                                    int row) const;
+
+  __attribute__((noinline)) void decompressMiddleRow(BitStreamerMSB& bits,
+                                                     int row) const;
 
 public:
   explicit OlympusDecompressorImpl(RawImage img) : mRaw(std::move(img)) {}
@@ -226,8 +232,9 @@ OlympusDecompressorImpl::decompressBlock(
   predictBlock(row, firstGroup, lastGroup);
 }
 
-__attribute__((noinline)) void
-OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits, int row) const {
+inline __attribute__((always_inline)) void
+OlympusDecompressorImpl::decompressRowImpl(BitStreamerMSB& bits,
+                                           int row) const {
   const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
 
   invariant(out.width() > 0);
@@ -255,6 +262,20 @@ OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits, int row) const {
   }
 }
 
+__attribute__((noinline)) void
+OlympusDecompressorImpl::decompressFirstRow(BitStreamerMSB& bits,
+                                            int row) const {
+  invariant(row < 2);
+  decompressRowImpl(bits, row);
+}
+
+__attribute__((noinline)) void
+OlympusDecompressorImpl::decompressMiddleRow(BitStreamerMSB& bits,
+                                             int row) const {
+  invariant(row >= 2);
+  decompressRowImpl(bits, row);
+}
+
 void OlympusDecompressorImpl::decompress(ByteStream input) const {
   invariant(mRaw->dim.y > 0);
   invariant(mRaw->dim.x > 0);
@@ -263,8 +284,12 @@ void OlympusDecompressorImpl::decompress(ByteStream input) const {
   input.skipBytes(7);
   BitStreamerMSB bits(input.peekRemainingBuffer().getAsArray1DRef());
 
-  for (int y = 0; y < mRaw->dim.y; y++)
-    decompressRow(bits, y);
+  int y = 0;
+  for (; y < 2; y++)
+    decompressFirstRow(bits, y);
+
+  for (; y < mRaw->dim.y; y++)
+    decompressMiddleRow(bits, y);
 }
 
 } // namespace
