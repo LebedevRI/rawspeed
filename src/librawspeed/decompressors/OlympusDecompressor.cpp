@@ -117,6 +117,18 @@ class OlympusDecompressorImpl final : public AbstractDecompressor {
                                                     int row, int col);
 
   inline __attribute__((always_inline)) void
+  decodeDiffGroup(std::array<OlympusDifferenceDecoder, 2>& acarry,
+                  BitStreamerMSB& bits, int row, int group) const;
+
+  inline __attribute__((always_inline)) void
+  decodeDiffBlock(std::array<OlympusDifferenceDecoder, 2>& acarry,
+                  BitStreamerMSB& bits, int row, int firstGroup,
+                  int lastGroup) const;
+
+  inline __attribute__((always_inline)) void predictGroup(int row,
+                                                          int group) const;
+
+  inline __attribute__((always_inline)) void
   decompressGroup(std::array<OlympusDifferenceDecoder, 2>& acarry,
                   BitStreamerMSB& bits, int row, int group) const;
 
@@ -172,7 +184,7 @@ OlympusDecompressorImpl::getPred(const Array2DRef<uint16_t> out, int row,
 }
 
 inline __attribute__((always_inline)) void
-OlympusDecompressorImpl::decompressGroup(
+OlympusDecompressorImpl::decodeDiffGroup(
     std::array<OlympusDifferenceDecoder, 2>& acarry, BitStreamerMSB& bits,
     int row, int group) const {
   const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
@@ -180,12 +192,37 @@ OlympusDecompressorImpl::decompressGroup(
   for (int c = 0; c != 2; ++c) {
     const int col = 2 * group + c;
     OlympusDifferenceDecoder& carry = acarry[c];
+    int16_t diff = carry.getDiff(bits);
+    out(row, col) = static_cast<uint16_t>(diff);
+  }
+}
 
-    int diff = carry.getDiff(bits);
+inline __attribute__((always_inline)) void
+OlympusDecompressorImpl::decodeDiffBlock(
+    std::array<OlympusDifferenceDecoder, 2>& acarry, BitStreamerMSB& bits,
+    int row, int firstGroup, int lastGroup) const {
+  for (int group = firstGroup; group != lastGroup; ++group)
+    decodeDiffGroup(acarry, bits, row, group);
+}
+
+inline __attribute__((always_inline)) void
+OlympusDecompressorImpl::predictGroup(int row, int group) const {
+  const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
+
+  for (int c = 0; c != 2; ++c) {
+    const int col = 2 * group + c;
+    int diff = static_cast<int16_t>(out(row, col));
     int pred = getPred(out, row, col);
-
     out(row, col) = implicit_cast<uint16_t>(pred + diff);
   }
+}
+
+inline __attribute__((always_inline)) void
+OlympusDecompressorImpl::decompressGroup(
+    std::array<OlympusDifferenceDecoder, 2>& acarry, BitStreamerMSB& bits,
+    int row, int group) const {
+  decodeDiffBlock(acarry, bits, row, group, group + 1);
+  predictGroup(row, group);
 }
 
 void OlympusDecompressorImpl::decompressRow(BitStreamerMSB& bits,
