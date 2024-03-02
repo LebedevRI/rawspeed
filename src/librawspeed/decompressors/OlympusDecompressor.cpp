@@ -40,6 +40,10 @@
 #include <cstdlib>
 #include <utility>
 
+#ifdef HAVE_OPENMP
+#include <omp.h>
+#endif
+
 namespace rawspeed {
 
 namespace {
@@ -120,10 +124,13 @@ class OlympusDecompressorImpl final : public AbstractDecompressor {
   inline __attribute__((always_inline)) void
   predictBlock(int row, int firstGroup, int lastGroup) const;
 
+  void createBlockPredictionTask(int row, int firstGroup, int lastGroup,
+                                 int blockSize) const;
+
   inline __attribute__((always_inline)) void
   decompressBlock(std::array<OlympusDifferenceDecoder, 2>& acarry,
-                  BitStreamerMSB& bits, int row, int firstGroup,
-                  int lastGroup) const;
+                  BitStreamerMSB& bits, int row, int firstGroup, int lastGroup,
+                  int blockSize) const;
 
   inline __attribute__((always_inline)) void
   decompressRowImpl(BitStreamerMSB& bits, int row) const;
@@ -224,12 +231,51 @@ OlympusDecompressorImpl::predictBlock(int row, int firstGroup,
     predictGroup(row, group);
 }
 
+void OlympusDecompressorImpl::createBlockPredictionTask(int row, int firstGroup,
+                                                        int lastGroup,
+                                                        int blockSize) const {
+  const Array2DRef<uint16_t> out(mRaw->getU16DataAsUncroppedArray2DRef());
+
+#ifdef HAVE_OPENMP
+  omp_depend_t blockInputs;
+  omp_depend_t blockOutput;
+#endif
+
+  int firstCol = 2 * firstGroup;
+  int firstColOfPrevBlock = 2 * (firstGroup - blockSize);
+
+  std::array<uint16_t*, 3> inDeps;
+  inDeps[0] =
+      row >= 2 && firstCol >= 2 ? &out(row - 2, firstColOfPrevBlock) : nullptr;
+  inDeps[1] = row >= 2 ? &out(row - 2, firstCol) : nullptr;
+  inDeps[2] = firstCol >= 2 ? &out(row - 0, firstColOfPrevBlock) : nullptr;
+
+  uint16_t* outDep = &out(row, firstCol);
+
+#ifdef HAVE_OPENMP
+#pragma omp depobj(blockInputs) depend(iterator(it = 0 : 3), in : *inDeps[it])
+#pragma omp depobj(blockOutput) depend(out : outDep)
+#endif
+
+#ifdef HAVE_OPENMP
+#pragma omp task default(none) depend(depobj                                   \
+                                      : blockInputs, blockOutput)              \
+    firstprivate(row, firstGroup, lastGroup)
+#endif
+  predictBlock(row, firstGroup, lastGroup);
+
+#ifdef HAVE_OPENMP
+#pragma omp depobj(blockInputs) destroy
+#pragma omp depobj(blockOutput) destroy
+#endif
+}
+
 inline __attribute__((always_inline)) void
 OlympusDecompressorImpl::decompressBlock(
     std::array<OlympusDifferenceDecoder, 2>& acarry, BitStreamerMSB& bits,
-    int row, int firstGroup, int lastGroup) const {
+    int row, int firstGroup, int lastGroup, int blockSize) const {
   decodeDiffBlock(acarry, bits, row, firstGroup, lastGroup);
-  predictBlock(row, firstGroup, lastGroup);
+  createBlockPredictionTask(row, firstGroup, lastGroup, blockSize);
 }
 
 inline __attribute__((always_inline)) void
@@ -248,7 +294,7 @@ OlympusDecompressorImpl::decompressRowImpl(BitStreamerMSB& bits,
   // but small-enough to fully fit into CPU L1d cache.
   constexpr int L1d = 32 * 1024; // FIXME: get actual value at run-time.
   constexpr int blockSize =
-      roundUpDivision(L1d, (1U << 6U) * (2 * sizeof(int16_t)));
+      roundUpDivision(L1d, (1U << 2U) * (2 * sizeof(int16_t)));
   // Going to `1<<7` instead of `1<<6` results in worse perf,
   // going to `1<<5` does not really improve perf, so it's a middle ground.
 
@@ -258,7 +304,7 @@ OlympusDecompressorImpl::decompressRowImpl(BitStreamerMSB& bits,
   for (int block = 0; block != numBlocks; ++block) {
     int firstGroup = blockSize * block;
     int lastGroup = std::min(firstGroup + blockSize, numGroups);
-    decompressBlock(acarry, bits, row, firstGroup, lastGroup);
+    decompressBlock(acarry, bits, row, firstGroup, lastGroup, blockSize);
   }
 }
 
@@ -306,6 +352,12 @@ OlympusDecompressor::OlympusDecompressor(RawImage img) : mRaw(std::move(img)) {
 }
 
 void OlympusDecompressor::decompress(ByteStream input) const {
+#ifdef HAVE_OPENMP
+  const int numThreads = rawspeed_get_number_of_processor_cores();
+#pragma omp parallel default(none) num_threads(numThreads) if (numThreads > 1) \
+    firstprivate(input)
+#pragma omp single
+#endif
   OlympusDecompressorImpl(mRaw).decompress(input);
 }
 
