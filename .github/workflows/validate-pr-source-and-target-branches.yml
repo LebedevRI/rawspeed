@@ -1,0 +1,19 @@
+name: Validate source/target branches of Pull Request
+
+on:
+  pull_request:
+
+jobs:
+  dump_contexts_to_log:
+    runs-on: ubuntu-latest
+    steps:
+      - if: github.base_ref != 'develop'
+        name: Close Pull
+        run: gh pr close --comment "Pull Requests should only be submitted to `develop` branch"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - if: github.head_ref == github.base_ref
+        name: Close Pull
+        run: gh pr close --comment "Please keep the commits-to-be merged in a differently-named branch than the branch to which you want those changes to be merged"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
