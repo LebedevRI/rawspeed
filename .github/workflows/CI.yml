@@ -59,7 +59,7 @@ jobs:
       enable-sample-based-testing: true
       rpuu-cache-key: ${{ needs.cache-rpuu.outputs.rpuu-cache-key }}
   linux-legacy:
-    needs: [ validation ]
+    needs: [ validation, linux-fast ]
     strategy:
       fail-fast: false
       matrix:
@@ -81,7 +81,7 @@ jobs:
       compiler-CLANG_TIDY: ${{ matrix.compiler.CLANG_TIDY }}
       flavor: ${{ matrix.flavor }}
   linux-static-analysis:
-    needs: [ validation ]
+    needs: [ validation, linux-fast ]
     strategy:
       fail-fast: false
       matrix:
@@ -110,7 +110,7 @@ jobs:
       compiler-CLANG_TIDY: ${{ matrix.compiler.CLANG_TIDY }}
       flavor: ${{ matrix.flavor }}
   linux-coverage:
-    needs: [ validation, cache-rpuu ]
+    needs: [ validation, cache-rpuu, linux-fast ]
     strategy:
       fail-fast: false
       matrix:
@@ -132,7 +132,7 @@ jobs:
       enable-sample-based-testing: true
       rpuu-cache-key: ${{ needs.cache-rpuu.outputs.rpuu-cache-key }}
   linux-sonarcloud-static-analysis:
-    needs: [ validation ]
+    needs: [ validation, linux-fast ]
     if: github.repository == 'darktable-org/rawspeed' && github.event_name != 'pull_request' && github.ref_type == 'branch' && (github.ref_name == 'develop' || github.ref_name == 'stable')
     strategy:
       fail-fast: false
@@ -157,7 +157,7 @@ jobs:
       SONAR_PROJECT_KEY: ${{ secrets.SONAR_PROJECT_KEY }}
       SONAR_ORGANIZATION: ${{ secrets.SONAR_ORGANIZATION }}
   linux-ossfuzz:
-    needs: [ validation ]
+    needs: [ validation, linux-fast ]
     if: github.repository == 'darktable-org/rawspeed' && (github.event_name == 'pull_request' || (github.ref_type == 'branch' && github.ref_name == 'develop'))
     strategy:
       fail-fast: false
@@ -167,7 +167,7 @@ jobs:
     with:
       sanitizer: ${{ matrix.sanitizer }}
   windows-msys2-fast:
-    needs: [ validation ]
+    needs: [ validation, cache-rpuu ]
     strategy:
       fail-fast: false
       matrix:
@@ -188,7 +188,7 @@ jobs:
       compiler-CXX: ${{ matrix.msys2.CXX }}
       flavor: ${{ matrix.flavor }}
   windows-msys2-coverage:
-    needs: [ validation ]
+    needs: [ validation, windows-msys2-fast ]
     strategy:
       fail-fast: false
       matrix:
@@ -206,7 +206,7 @@ jobs:
       compiler-CXX: ${{ matrix.msys2.CXX }}
       flavor: ${{ matrix.flavor }}
   macOS-fast:
-    needs: [ validation ]
+    needs: [ validation, cache-rpuu ]
     strategy:
       fail-fast: false
       matrix:
@@ -224,7 +224,7 @@ jobs:
       compiler-CXX: ${{ matrix.compiler.CXX }}
       flavor: ${{ matrix.flavor }}
   macOS-coverage:
-    needs: [ validation ]
+    needs: [ validation, macOS-fast ]
     strategy:
       fail-fast: false
       matrix:
