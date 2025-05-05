@@ -1,0 +1,42 @@
+name: Validate source/target branches of Pull Request
+
+on:
+  pull_request_target:
+    types: [ opened, synchronize ]
+
+jobs:
+  clang-format:
+    uses: ./.github/workflows/CI-linux.yml
+    with:
+      os: linux
+      distro: "debian:trixie-slim"
+      compiler-family: LLVM
+      compiler-version: 18
+      compiler-CC: clang-18
+      compiler-CXX: clang++-18
+      flavor: ClangFormat
+  clang-format-comment:
+    needs: [ clang-format ]
+    if: always() && github.event_name == 'pull_request_target' && needs.clang-format.outputs.clang-format-artifact-url != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.number }}
+          body: |
+            The proposed diff is not `clang-format`ted.
+            To make this check pass, download the following patch
+            (via browser, you must be logged-in in order for this URL to work),
+            apply it, commit to the branch and push it:
+            ${{ needs.clang-format.outputs.clang-format-artifact-url }}
+            ```bash
+            $ cd <path/to/repo/checkout>
+            $ unzip <path/to/downloaded/clang-format.patch.zip>
+            $ git stash # Temporairly stash away any preexisting diff
+            $ git apply clang-format.patch # Apply the diff
+            $ git add -u # Stage changed files
+            $ git commit -m "Applying clang-format" # Commit the patch
+            $ git push
+            $ git stash pop # Unstast preexisting diff
+            ```

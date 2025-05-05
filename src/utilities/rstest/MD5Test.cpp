@@ -394,7 +394,11 @@ TEST_P(MD5Test, CheckTestCaseSet) {
   });
 }
 
-TEST_P(MD5Test, CheckTestCaseSetInParts) {
+TEST_P
+(
+  MD5Test
+  ,
+ CheckTestCaseSetInParts) {
   ASSERT_NO_THROW({
     const auto len_total = rawspeed::implicit_cast<int>(
         strlen(reinterpret_cast<const char*>(message)));

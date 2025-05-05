@@ -37,6 +37,9 @@ on:
       SONAR_TOKEN:
       SONAR_PROJECT_KEY:
       SONAR_ORGANIZATION:
+    outputs:
+      clang-format-artifact-url:
+        value: ${{ jobs.linux.outputs.clang-format-artifact-url }}
 
 env:
   RPUU_DST: ${{ github.workspace }}/raw-camera-samples/raw.pixls.us-unique
@@ -51,7 +54,13 @@ jobs:
     container:
       image: ${{ inputs.distro }}
       options: --tmpfs /tmp:exec --tmpfs /__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}:exec
+    outputs:
+      clang-format-artifact-url: ${{ steps.clang-format-upload.outputs.artifact-url }}
     steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
       - name: Configure APT
         timeout-minutes: 1
         run: |
@@ -121,29 +130,31 @@ jobs:
         run: |
           set -xe
           eatmydata apt install ca-certificates \
-                                    cmake \
-                                    git \
-                                    googletest \
-                                    binutils-gold \
-                                    libjpeg-dev \
-                                    libpugixml-dev \
-                                    libxml2-utils \
-                                    ninja-build \
-                                    zlib1g-dev
-          if [ "$COMPILER_FAMILY" = "GNU" ]; then
-            eatmydata apt install g++-${{ inputs.compiler-version }} \
-                                      gcc \
-                                      gcc-${{ inputs.compiler-version }}
-          fi
-          if [ "$COMPILER_FAMILY" = "LLVM" ]; then
-            eatmydata apt install clang-${{ inputs.compiler-version }} \
-                                      libomp-${{ inputs.compiler-version }}-dev
+                                git
+          if [ "$FLAVOR" != "ClangFormat" ]; then
+            eatmydata apt install cmake \
+                                  googletest \
+                                  binutils-gold \
+                                  libjpeg-dev \
+                                  libpugixml-dev \
+                                  libxml2-utils \
+                                  ninja-build \
+                                  zlib1g-dev
+            if [ "$COMPILER_FAMILY" = "GNU" ]; then
+              eatmydata apt install g++-${{ inputs.compiler-version }} \
+                                    gcc \
+                                    gcc-${{ inputs.compiler-version }}
+            fi
+            if [ "$COMPILER_FAMILY" = "LLVM" ]; then
+              eatmydata apt install clang-${{ inputs.compiler-version }} \
+                                    libomp-${{ inputs.compiler-version }}-dev
+            fi
           fi
           if [ "$ENABLE_SAMPLE_BASED_TESTING" = "true" ]; then
             eatmydata apt install zstd
           fi
           if [ "$FLAVOR" = "ClangTidy" ]; then
-            eatmydata apt install clang-format-${{ inputs.compiler-version }} clang-tidy-${{ inputs.compiler-version }}
+            eatmydata apt install clang-tidy-${{ inputs.compiler-version }}
 
             eatmydata apt install curl gpg
             mkdir -p /etc/apt/sources.list.d
@@ -151,6 +162,9 @@ jobs:
             curl -fsSL https://download.opensuse.org/repositories/graphics:darktable:master/Debian_Unstable/Release.key | gpg --dearmor | tee /etc/apt/trusted.gpg.d/graphics_darktable_master.gpg > /dev/null
             apt update
             eatmydata apt install rawspeed-clang-tidy-module
+          fi
+          if [ "$FLAVOR" = "ClangFormat" ]; then
+            eatmydata apt install clang-format-${{ inputs.compiler-version }}
           fi
           if [ "$FLAVOR" = "ClangTidy" ] || [ "$FLAVOR" = "ClangStaticAnalysis" ] || [ "$FLAVOR" = "ClangCTUStaticAnalysis" ]; then
             eatmydata apt install clang-tools-${{ inputs.compiler-version }} \
@@ -187,17 +201,22 @@ jobs:
                                   python3-sphinx-rtd-theme;
           fi
           ln -s /usr/bin/ld.gold /usr/bin/ld
-      - name: Configure git
-        timeout-minutes: 1
-        run: |
-          set -xe
-          git config --global --add safe.directory "${GITHUB_WORKSPACE}"
       - name: Fetch/Checkout RawSpeed git repo
         timeout-minutes: 1
         uses: actions/checkout@v4
         with:
           path: 'rawspeed'
           fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+          set-safe-directory: ${{ github.workspace }}
+      - name: Switch to the Pull Request's merge commit
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR: ${{ github.event.number }}
+        run: |
+          set -xe
+          cd rawspeed
+          git fetch origin pull/${PR}/merge:pr/${PR}/merge
+          git switch pr/${PR}/merge
       - name: Get cache of raw.pixls.us masterset
         timeout-minutes: 1
         if: inputs.enable-sample-based-testing
@@ -268,16 +287,31 @@ jobs:
           unzip -o $HOME/.sonar/sonar-scanner.zip -d $HOME/.sonar/
           echo "$HOME/.sonar/sonar-scanner-${{ env.SONAR_SCANNER_VERSION }}-linux/bin" >> $GITHUB_PATH
       - name: Verify that the source code is properly formatted
+        id: clang-format
         timeout-minutes: 1
-        if: inputs.flavor == 'ClangTidy'
+        if: inputs.flavor == 'ClangFormat'
         env:
           SRC_DIR: ${{ github.workspace }}/rawspeed
         run: |
           set -xe
           cd "$SRC_DIR"
-          git ls-tree -r --name-only HEAD | grep -vf .clang-format-ignore | xargs clang-format-${{ inputs.compiler-version }} --verbose --dry-run -Werror
+          git ls-tree -r --name-only HEAD | grep -vf .clang-format-ignore | xargs clang-format-${{ inputs.compiler-version }} -i
+          git diff -p -U8 > "${GITHUB_WORKSPACE}/clang-format.patch"
+          git diff --exit-code --quiet
+      - name: Upload clang-format patch
+        id: clang-format-upload
+        timeout-minutes: 1
+        if: inputs.flavor == 'ClangFormat' && failure() && steps.clang-format.conclusion == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: clang-format.patch
+          path: ${{ github.workspace }}/clang-format.patch
+          if-no-files-found: error
+          compression-level: 9
+          overwrite: true
       - name: Configure
         timeout-minutes: 1
+        if: inputs.flavor != 'ClangFormat'
         env:
           CC: ${{ inputs.compiler-CC }}
           CXX: ${{ inputs.compiler-CXX }}
@@ -306,7 +340,7 @@ jobs:
       - name: Build
         id: build
         timeout-minutes: ${{ inputs.flavor != 'ClangTidy' && (inputs.flavor != 'CodeQLAnalysis' && 7 || 12) || 25 }}
-        if: inputs.flavor != 'WWW'
+        if: inputs.flavor != 'ClangFormat' && inputs.flavor != 'WWW'
         env:
           SRC_DIR: ${{ github.workspace }}/rawspeed
           BUILD_DIR: ${{ github.workspace }}/rawspeed-build
@@ -337,7 +371,7 @@ jobs:
           path: ${{ github.workspace }}/rawspeed-build/docs/html
       - name: Test (unit tests)
         timeout-minutes: 1
-        if: inputs.flavor != 'WWW'
+        if: inputs.flavor != 'ClangFormat' && inputs.flavor != 'WWW'
         env:
           SRC_DIR: ${{ github.workspace }}/rawspeed
           BUILD_DIR: ${{ github.workspace }}/rawspeed-build
@@ -364,7 +398,7 @@ jobs:
           mv "${BUILD_DIR}/gcov-reports-unittest" "${COVERAGE_REPORT_PREFIX}/unittests"
       - name: Test (benchmarks)
         timeout-minutes: 1
-        if: inputs.flavor != 'WWW'
+        if: inputs.flavor != 'ClangFormat' && inputs.flavor != 'WWW'
         env:
           SRC_DIR: ${{ github.workspace }}/rawspeed
           BUILD_DIR: ${{ github.workspace }}/rawspeed-build
@@ -427,7 +461,7 @@ jobs:
           enableCrossOsArchive: true
       - name: Install
         timeout-minutes: 1
-        if: inputs.flavor != 'WWW'
+        if: inputs.flavor != 'ClangFormat' && inputs.flavor != 'WWW'
         env:
           SRC_DIR: ${{ github.workspace }}/rawspeed
           BUILD_DIR: ${{ github.workspace }}/rawspeed-build
